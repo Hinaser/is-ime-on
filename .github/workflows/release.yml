@@ -27,17 +27,23 @@ jobs:
         shell: pwsh
         run: |
           $version = if ($env:GITHUB_REF -like 'refs/tags/*') { $env:GITHUB_REF -replace '^refs/tags/v?','' } else { 'dev' }
-          $name = "IsImeOn-$version-win-x64"
-          New-Item -ItemType Directory -Force dist/$name | Out-Null
-          Copy-Item target/release/IsImeOn.exe dist/$name/
-          Copy-Item README.md dist/$name/
-          Compress-Archive -Path dist/$name -DestinationPath "dist/$name.zip"
-          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash
+          # zip 内のフォルダ名にバージョンを入れない。winget の portable は
+          # zip 内の相対パスへ展開するため、ここにバージョンが入ると
+          # アップグレードのたびに exe の絶対パスが変わり、
+          # HKCU\...\Run に登録した自動起動が黙って壊れる。
+          $stage = "dist/IsImeOn"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item target/release/IsImeOn.exe $stage/
+          Copy-Item README.md $stage/
+          Copy-Item LICENSE  $stage/          # MIT は配布物への同梱を要求する
+          $zipName = "IsImeOn-$version-win-x64.zip"
+          Compress-Archive -Path $stage -DestinationPath "dist/$zipName"
+          $hash = (Get-FileHash "dist/$zipName" -Algorithm SHA256).Hash
           $exeHash = (Get-FileHash target/release/IsImeOn.exe -Algorithm SHA256).Hash
-          "$hash  $name.zip"        | Out-File dist/SHA256SUMS.txt -Encoding ascii
-          "$exeHash  IsImeOn.exe"   | Out-File dist/SHA256SUMS.txt -Encoding ascii -Append
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "zip=dist/$name.zip"      >> $env:GITHUB_OUTPUT
+          "$hash  $zipName"       | Out-File dist/SHA256SUMS.txt -Encoding ascii
+          "$exeHash  IsImeOn.exe" | Out-File dist/SHA256SUMS.txt -Encoding ascii -Append
+          "version=$version"      >> $env:GITHUB_OUTPUT
+          "zip=dist/$zipName"     >> $env:GITHUB_OUTPUT
 
       # ビルド来歴の証明: このバイナリが「どのコミットを、どのワークフローで」ビルドしたものかを
       # Sigstore で署名して公開する。コード署名証明書と違い無料で、かつ

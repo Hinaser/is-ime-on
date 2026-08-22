@@ -3,7 +3,7 @@ PackageVersion: 0.1.0
 InstallerType: zip
 NestedInstallerType: portable
 NestedInstallerFiles:
-  - RelativeFilePath: IsImeOn-0.1.0-win-x64\IsImeOn.exe
+  - RelativeFilePath: IsImeOn\IsImeOn.exe
     PortableCommandAlias: IsImeOn
 Installers:
   - Architecture: x64

@@ -18,6 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 /// 設定が保存されたとき常駐プロセスのメインウィンドウへ届くメッセージ(再読込を促す)。
 pub const WM_APP_RELOAD: u32 = WM_APP + 3;
+/// アンインストール時に常駐プロセスへ終了を要求するメッセージ。
+pub const WM_APP_QUIT: u32 = WM_APP + 4;
 
 const WINDOW_TITLE: &str = "IsImeOn — 設定";
 
@@ -48,9 +50,13 @@ pub fn run_settings_process() {
 
 /// 保存を常駐プロセスへ通知する。
 fn notify_main() {
+    post_to_main(WM_APP_RELOAD);
+}
+
+fn post_to_main(msg: u32) {
     unsafe {
         if let Ok(main) = FindWindowW(w!("IsImeOnMain"), None) {
-            let _ = PostMessageW(Some(main), WM_APP_RELOAD, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(Some(main), msg, WPARAM(0), LPARAM(0));
         }
     }
 }
@@ -58,7 +64,7 @@ fn notify_main() {
 fn run_window() {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([600.0, 760.0])
+            .with_inner_size([500.0, 532.0])
             .with_title(WINDOW_TITLE),
         ..Default::default()
     };
@@ -74,23 +80,40 @@ fn run_window() {
 
 /// egui 標準フォントは CJK を含まないため、システムの日本語フォントを追加する。
 fn install_jp_fonts(ctx: &egui::Context) {
-    let candidates = [
-        r"C:\Windows\Fonts\YuGothM.ttc",
-        r"C:\Windows\Fonts\YuGothR.ttc",
-        r"C:\Windows\Fonts\meiryo.ttc",
-        r"C:\Windows\Fonts\msgothic.ttc",
+    // (ファイル, フェイス番号)。いずれも「UI」向けフェイスを選ぶこと。
+    // 本文用フェイス(index 0)は hhea の lineGap が 1024/2048em = 0.5em もあり、
+    // egui はそれを行の高さに算入するため、ベースラインが行の中央あたりに落ちて
+    // ウィジェット下側に大きな余白ができてしまう。UIフェイスは lineGap = 0。
+    let candidates: [(&str, u32); 4] = [
+        (r"C:\Windows\Fonts\YuGothM.ttc", 1),  // Yu Gothic UI
+        (r"C:\Windows\Fonts\YuGothR.ttc", 1),  // Yu Gothic UI Semilight
+        (r"C:\Windows\Fonts\meiryo.ttc", 2),   // Meiryo UI
+        (r"C:\Windows\Fonts\msgothic.ttc", 1), // MS UI Gothic
     ];
-    let Some(bytes) = candidates.iter().find_map(|p| std::fs::read(p).ok()) else {
+    let Some((bytes, index)) = candidates
+        .iter()
+        .find_map(|(path, i)| std::fs::read(path).ok().map(|b| (b, *i)))
+    else {
         return;
     };
+    let mut font = egui::FontData::from_owned(bytes);
+    font.index = index;
     let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        "jp".to_owned(),
-        std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-    );
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts.families.entry(family).or_default().push("jp".to_owned());
-    }
+    fonts.font_data.insert("jp".to_owned(), std::sync::Arc::new(font));
+    // 既定フォント(欧文)の「後ろ」に足すと、1行の中で欧文と和文が別フォントになり、
+    // フォントごとのメトリクス差でベースラインがずれる(例:「IMEオフ」)。
+    // 和文フォントは欧文字形も持っているので、先頭に入れて全文字を同一フォントで描く。
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "jp".to_owned());
+    // 等幅は欧文の等幅性を保ちたいので、和文は fallback のままにする
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .push("jp".to_owned());
     ctx.set_fonts(fonts);
 }
 
@@ -103,6 +126,12 @@ struct SettingsApp {
     selected_preset: usize,
     status: String,
     startup: bool,
+    /// Run キーに登録されている exe のパス(未登録なら None)
+    startup_path: Option<String>,
+    /// 登録先が「今動いている exe」と一致しているか
+    startup_is_current: bool,
+    /// 「完全に削除して終了」の確認待ち
+    confirm_uninstall: bool,
     os_indicator: bool,
     last_sys_check: Instant,
 }
@@ -117,6 +146,9 @@ impl SettingsApp {
             selected_preset: 0,
             status: String::new(),
             startup: sysint::is_startup_registered(),
+            startup_path: sysint::registered_exe().map(|p| p.display().to_string()),
+            startup_is_current: sysint::is_startup_current(),
+            confirm_uninstall: false,
             os_indicator: sysint::is_os_indicator_active(),
             last_sys_check: Instant::now(),
         }
@@ -134,6 +166,8 @@ impl eframe::App for SettingsApp {
         // 2秒ごとにシステム状態(自動起動の登録・OS標準インジケーターの起動)を再確認
         if self.last_sys_check.elapsed() > Duration::from_secs(2) {
             self.startup = sysint::is_startup_registered();
+            self.startup_path = sysint::registered_exe().map(|p| p.display().to_string());
+            self.startup_is_current = sysint::is_startup_current();
             self.os_indicator = sysint::is_os_indicator_active();
             self.last_sys_check = Instant::now();
         }
@@ -153,6 +187,7 @@ impl eframe::App for SettingsApp {
                 self.ui_presets(ui);
                 ui.separator();
                 self.ui_startup(ui);
+                self.ui_uninstall(ui);
                 if !self.status.is_empty() {
                     ui.add_space(4.0);
                     ui.label(RichText::new(&self.status).weak());
@@ -378,8 +413,86 @@ impl SettingsApp {
                 sysint::remove_startup();
                 self.status = "スタートアップ登録を解除しました".into();
             }
-            self.startup = sysint::is_startup_registered();
+            self.refresh_startup_state();
         }
+
+        // Windows は登録時の絶対パスをそのまま起動するので、どこを指しているかを見せる
+        if let Some(path) = self.startup_path.clone() {
+            ui.label(RichText::new(format!("登録先: {path}")).weak().small());
+            if !self.startup_is_current {
+                ui.horizontal(|ui| {
+                    ui.colored_label(
+                        Color32::from_rgb(0xE0, 0xA0, 0x30),
+                        "⚠ 別の場所の exe が登録されています(このままでは自動起動しません)",
+                    );
+                    if ui.button("この exe に登録し直す").clicked() {
+                        sysint::set_startup();
+                        self.refresh_startup_state();
+                        self.status = "登録先を更新しました".into();
+                    }
+                });
+            }
+        }
+    }
+
+    fn ui_uninstall(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.label(RichText::new("アンインストール").strong());
+
+        if sysint::is_winget_managed() {
+            ui.label(
+                RichText::new(
+                    "winget で導入されています。削除は `winget uninstall Hinaser.IsImeOn` を使ってください。",
+                )
+                .weak(),
+            );
+            return;
+        }
+
+        if !self.confirm_uninstall {
+            if ui.button("完全に削除して終了").clicked() {
+                self.confirm_uninstall = true;
+            }
+            ui.label(
+                RichText::new("設定・自動起動の登録・IsImeOn.exe をすべて削除します")
+                    .weak()
+                    .small(),
+            );
+            return;
+        }
+
+        ui.colored_label(
+            Color32::from_rgb(0xE0, 0xA0, 0x30),
+            "本当に削除しますか?この操作は元に戻せません。",
+        );
+        ui.horizontal(|ui| {
+            if ui.button("削除する").clicked() {
+                self.run_uninstall(ui.ctx());
+            }
+            if ui.button("キャンセル").clicked() {
+                self.confirm_uninstall = false;
+            }
+        });
+    }
+
+    fn run_uninstall(&mut self, ctx: &egui::Context) {
+        let errors = sysint::remove_traces();
+        if !errors.is_empty() {
+            // 消せないものがあるときは exe を消さずに知らせる(消し残しを隠さない)
+            self.confirm_uninstall = false;
+            self.refresh_startup_state();
+            self.status = format!("削除できない項目があります: {}", errors.join(" / "));
+            return;
+        }
+        post_to_main(WM_APP_QUIT); // 常駐プロセスを終了させる(exe のロックを外す)
+        sysint::schedule_self_delete();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    fn refresh_startup_state(&mut self) {
+        self.startup = sysint::is_startup_registered();
+        self.startup_path = sysint::registered_exe().map(|p| p.display().to_string());
+        self.startup_is_current = sysint::is_startup_current();
     }
 }
 
@@ -423,18 +536,24 @@ fn draw_preview(ui: &mut egui::Ui, setting: &crate::config::ModeSetting, shape: 
         egui::StrokeKind::Inside,
     );
 
+    const FONT_SIZE: f32 = 18.0;
     let text_pos = egui::pos2(rect.left() + 14.0, rect.center().y);
     let text_rect = p.text(
         text_pos,
         egui::Align2::LEFT_CENTER,
         "あいうえお",
-        FontId::proportional(18.0),
+        FontId::proportional(FONT_SIZE),
         Color32::BLACK,
     );
 
+    // p.text() が返すのはフォントの ascent/descent を含む galley 矩形で、
+    // 実際の字面よりかなり上下に広い。そのまま使うとインジケーターが浮いて見えるため、
+    // 実キャレット(字面の高さ + わずかな余白)に近い矩形を字面中央から作る。
     let caret_x = text_rect.right() + 3.0;
-    let caret_top = text_rect.top() - 2.0;
-    let caret_bottom = text_rect.bottom() + 2.0;
+    let caret_h = FONT_SIZE * 1.15;
+    let center_y = text_rect.center().y;
+    let caret_top = center_y - caret_h / 2.0;
+    let caret_bottom = center_y + caret_h / 2.0;
     p.rect_filled(
         egui::Rect::from_min_size(
             egui::pos2(caret_x, caret_top),

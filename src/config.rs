@@ -201,9 +201,14 @@ impl AppConfig {
             .unwrap_or_else(|| default_modes().remove(mode.key()).unwrap())
     }
 
-    pub fn file_path() -> PathBuf {
+    /// 設定を置くディレクトリ(%APPDATA%\IsImeOn)。
+    pub fn dir_path() -> PathBuf {
         let appdata = std::env::var_os("APPDATA").unwrap_or_default();
-        PathBuf::from(appdata).join("IsImeOn").join("config.json")
+        PathBuf::from(appdata).join("IsImeOn")
+    }
+
+    pub fn file_path() -> PathBuf {
+        Self::dir_path().join("config.json")
     }
 
     pub fn load() -> AppConfig {

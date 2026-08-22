@@ -106,6 +106,9 @@ fn main() {
         )
         .expect("CreateWindowExW");
 
+        // exe を移動された場合に備え、自動起動の登録先を現在のパスへ追随させる
+        sysint::refresh_startup_if_moved();
+
         let config = AppConfig::load();
         let overlay = Overlay::new().expect("overlay");
         let tray = Tray::new(hwnd);
@@ -181,6 +184,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         }
         settings::WM_APP_RELOAD => {
             handle_command(hwnd, CMD_RELOAD);
+            LRESULT(0)
+        }
+        // 設定ウィンドウからのアンインストール要求。exe のロックを外すため終了する。
+        settings::WM_APP_QUIT => {
+            handle_command(hwnd, CMD_EXIT);
             LRESULT(0)
         }
         WM_APP_TRAY => {
