@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write      # リリース作成
+  id-token: write      # ビルド来歴(provenance)の署名
+  attestations: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Package
+        id: pack
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF -like 'refs/tags/*') { $env:GITHUB_REF -replace '^refs/tags/v?','' } else { 'dev' }
+          $name = "IsImeOn-$version-win-x64"
+          New-Item -ItemType Directory -Force dist/$name | Out-Null
+          Copy-Item target/release/IsImeOn.exe dist/$name/
+          Copy-Item README.md dist/$name/
+          Compress-Archive -Path dist/$name -DestinationPath "dist/$name.zip"
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash
+          $exeHash = (Get-FileHash target/release/IsImeOn.exe -Algorithm SHA256).Hash
+          "$hash  $name.zip"        | Out-File dist/SHA256SUMS.txt -Encoding ascii
+          "$exeHash  IsImeOn.exe"   | Out-File dist/SHA256SUMS.txt -Encoding ascii -Append
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "zip=dist/$name.zip"      >> $env:GITHUB_OUTPUT
+
+      # ビルド来歴の証明: このバイナリが「どのコミットを、どのワークフローで」ビルドしたものかを
+      # Sigstore で署名して公開する。コード署名証明書と違い無料で、かつ
+      # 「手元のPCではなく公開されたソースからビルドされた」ことまで検証できる。
+      #   利用者側: gh attestation verify IsImeOn.exe --repo <owner>/<repo>
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            target/release/IsImeOn.exe
+            ${{ steps.pack.outputs.zip }}
+
+      # workflow_dispatch(手動実行)では成果物のビルドと検証だけ行い、リリースは作らない
+      - name: Upload artifact (manual runs)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: IsImeOn-dev
+          path: dist/
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME `
+            "${{ steps.pack.outputs.zip }}" `
+            dist/SHA256SUMS.txt `
+            --title "IsImeOn ${{ steps.pack.outputs.version }}" `
+            --generate-notes

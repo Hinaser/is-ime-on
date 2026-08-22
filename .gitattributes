@@ -1,0 +1,8 @@
+# リポジトリ内は LF に正規化する(作業ツリーの改行はGitが変換)。
+# Windows専用プロジェクトだが、CRLF/LF混在による無意味な差分を防ぐため。
+* text=auto eol=lf
+
+# バイナリ(将来アイコン等を追加する場合)
+*.png binary
+*.ico binary
+*.exe binary

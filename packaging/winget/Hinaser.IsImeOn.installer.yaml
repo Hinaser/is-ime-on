@@ -1,0 +1,13 @@
+PackageIdentifier: Hinaser.IsImeOn
+PackageVersion: 0.1.0
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: IsImeOn-0.1.0-win-x64\IsImeOn.exe
+    PortableCommandAlias: IsImeOn
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/Hinaser/is-ime-on/releases/download/v0.1.0/IsImeOn-0.1.0-win-x64.zip
+    InstallerSha256: <リリースの SHA256SUMS.txt から転記>
+ManifestType: installer
+ManifestVersion: 1.6.0
