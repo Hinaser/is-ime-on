@@ -124,6 +124,8 @@ cargo test                  # 単体テスト
 
 ## 既知の制約
 
+表示されない・映らないなどの症状別の対処は [TROUBLESHOOTING.md](TROUBLESHOOTING.md) を参照。
+
 - キャレット位置はシステムキャレット→UI Automation の順で取得する。UIAの TextPattern も
   提供しないアプリでは表示されない(動作確認済み: メモ帳・Firefox・Chrome・Windows Terminal)
 - キャレット追従はイベント+ポーリング(既定100ms)のため、高速なカーソル移動ではわずかに遅れることがある
