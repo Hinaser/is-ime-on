@@ -2,6 +2,8 @@
 name = "is-ime-on"
 version = "0.1.0"
 edition = "2024"
+# as_chunks(1.88安定化)を使用
+rust-version = "1.88"
 description = "IME-linked text caret indicator for Windows"
 license = "MIT"
 repository = "https://github.com/Hinaser/is-ime-on"
