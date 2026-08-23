@@ -638,7 +638,7 @@ fn draw_preview(ui: &mut egui::Ui, setting: &crate::config::ModeSetting, shape: 
     p.rect_stroke(
         rect,
         4.0,
-        Stroke::new(1.0, Color32::from_rgb(0xC8, 0xC8, 0xC8)),
+        Stroke::new(1.0_f32, Color32::from_rgb(0xC8, 0xC8, 0xC8)),
         egui::StrokeKind::Inside,
     );
 
