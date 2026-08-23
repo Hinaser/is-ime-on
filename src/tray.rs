@@ -1,10 +1,28 @@
-//! タスクトレイ常駐。アイコンは現在モードの色の丸。
+//! タスクトレイ常駐。アイコンは現在モードの色の角丸バッジ+バッジ文字
+//! (オーバーレイ・アプリアイコンと同じモチーフ)。
+//! 描画はオーバーレイと同じ Direct2D/DirectWrite で行い、SM_CXSMICON の実サイズで
+//! レンダリングする(高DPIでも滲まない)。
 
+use crate::shape;
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, POINT};
+use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
+};
+use windows::Win32::Graphics::Direct2D::{
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+    D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
+};
+use windows::Win32::Graphics::DirectWrite::{
+    DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
+    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_CENTER,
+};
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
-    CreateBitmap, CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    DIB_RGB_COLORS, HGDIOBJ,
+    CreateBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
@@ -12,8 +30,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
-    SetForegroundWindow, TrackPopupMenu, HICON, ICONINFO, MF_CHECKED, MF_SEPARATOR, MF_STRING,
-    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP,
+    GetSystemMetrics, SetForegroundWindow, TrackPopupMenu, HICON, ICONINFO, MF_CHECKED,
+    MF_SEPARATOR, MF_STRING, SM_CXSMICON, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP,
 };
 
 /// トレイアイコンからのコールバックメッセージ。
@@ -29,11 +47,15 @@ const TRAY_ID: u32 = 1;
 pub struct Tray {
     hwnd: HWND,
     icon: Option<HICON>,
+    renderer: Option<BadgeIconRenderer>,
 }
 
 impl Tray {
     pub fn new(hwnd: HWND) -> Tray {
-        let icon = create_circle_icon((0, 0, 0));
+        let mut renderer = BadgeIconRenderer::new().ok();
+        let icon = renderer
+            .as_mut()
+            .and_then(|r| r.render((0, 0, 0), "A", None));
         let mut nid = base_nid(hwnd);
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = WM_APP_TRAY;
@@ -44,12 +66,21 @@ impl Tray {
         unsafe {
             let _ = Shell_NotifyIconW(NIM_ADD, &nid);
         }
-        Tray { hwnd, icon }
+        Tray { hwnd, icon, renderer }
     }
 
-    /// アイコンの色とツールチップを現在モードに合わせて更新。
-    pub fn update(&mut self, color: (u8, u8, u8), tip: &str) {
-        let new_icon = create_circle_icon(color);
+    /// アイコン(モード色の角丸バッジ+文字)とツールチップを現在モードに合わせて更新。
+    pub fn update(
+        &mut self,
+        color: (u8, u8, u8),
+        label: &str,
+        label_color: Option<(u8, u8, u8)>,
+        tip: &str,
+    ) {
+        let new_icon = self
+            .renderer
+            .as_mut()
+            .and_then(|r| r.render(color, label, label_color));
         let mut nid = base_nid(self.hwnd);
         nid.uFlags = NIF_ICON | NIF_TIP;
         if let Some(h) = new_icon {
@@ -129,61 +160,175 @@ fn set_tip(nid: &mut NOTIFYICONDATAW, tip: &str) {
     nid.szTip[utf16.len()] = 0;
 }
 
-/// 16x16 のアンチエイリアス付き丸アイコン(塗り=指定色、縁=グレー)を生成する。
-fn create_circle_icon(rgb: (u8, u8, u8)) -> Option<HICON> {
-    const N: i32 = 16;
-    let bmi = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: N,
-            biHeight: -N, // top-down
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    unsafe {
-        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        let dib = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
-        let px = std::slice::from_raw_parts_mut(bits as *mut u32, (N * N) as usize);
+/// モード色の角丸バッジ+文字のトレイアイコンを Direct2D で描く。
+/// オーバーレイと同じ描画系なので、字形・自動文字色の見え方が完全に一致する。
+struct BadgeIconRenderer {
+    dwrite: IDWriteFactory,
+    rt: ID2D1DCRenderTarget,
+    mem_dc: HDC,
+    dib: HBITMAP,
+    bits: *mut u8,
+    size: i32,
+}
 
-        let (cx, cy) = (8.0f32, 8.0f32);
-        let r_outer = 6.5f32; // 縁の外径
-        let r_inner = 5.3f32; // 塗りの半径
-        let border = (90u8, 90u8, 90u8);
-        for y in 0..N {
-            for x in 0..N {
-                let d = ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt();
-                // 縁の円の上に塗りの円を重ねる(BGRA・プリマルチプライド)
-                let a_outer = (r_outer - d + 0.5).clamp(0.0, 1.0);
-                let a_inner = (r_inner - d + 0.5).clamp(0.0, 1.0);
-                let mix = |b: u8, f: u8| -> f32 {
-                    b as f32 * (1.0 - a_inner) + f as f32 * a_inner
-                };
-                let (r, g, b) = (
-                    mix(border.0, rgb.0),
-                    mix(border.1, rgb.1),
-                    mix(border.2, rgb.2),
-                );
-                let a = a_outer;
-                let pm = |c: f32| -> u32 { (c * a) as u32 };
-                px[(y * N + x) as usize] =
-                    ((a * 255.0) as u32) << 24 | pm(r) << 16 | pm(g) << 8 | pm(b);
-            }
+impl BadgeIconRenderer {
+    fn new() -> windows::core::Result<BadgeIconRenderer> {
+        unsafe {
+            let size = GetSystemMetrics(SM_CXSMICON).max(16);
+            let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+            let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+            let props = D2D1_RENDER_TARGET_PROPERTIES {
+                r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 96.0,
+                dpiY: 96.0,
+                usage: D2D1_RENDER_TARGET_USAGE_NONE,
+                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+            };
+            let rt = d2d.CreateDCRenderTarget(&props)?;
+            let mem_dc = CreateCompatibleDC(None);
+            let bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: size,
+                    biHeight: -size, // top-down
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+            let dib = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)?;
+            windows::Win32::Graphics::Gdi::SelectObject(mem_dc, HGDIOBJ(dib.0));
+            Ok(BadgeIconRenderer {
+                dwrite,
+                rt,
+                mem_dc,
+                dib,
+                bits: bits as *mut u8,
+                size,
+            })
         }
+    }
 
-        let mask = CreateBitmap(N, N, 1, 1, None);
-        let info = ICONINFO {
-            fIcon: true.into(),
-            hbmColor: dib,
-            hbmMask: mask,
-            ..Default::default()
-        };
-        let icon = CreateIconIndirect(&info).ok();
-        let _ = DeleteObject(HGDIOBJ(dib.0));
-        let _ = DeleteObject(HGDIOBJ(mask.0));
-        icon
+    fn render(
+        &mut self,
+        color: (u8, u8, u8),
+        label: &str,
+        label_color: Option<(u8, u8, u8)>,
+    ) -> Option<HICON> {
+        let label = if label.is_empty() { "?" } else { label };
+        let s = self.size as f32;
+        unsafe {
+            let rect = RECT { left: 0, top: 0, right: self.size, bottom: self.size };
+            self.rt.BindDC(self.mem_dc, &rect).ok()?;
+            self.rt.BeginDraw();
+            self.rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
+
+            let to_f = |c: (u8, u8, u8)| D2D1_COLOR_F {
+                r: c.0 as f32 / 255.0,
+                g: c.1 as f32 / 255.0,
+                b: c.2 as f32 / 255.0,
+                a: 1.0,
+            };
+            let bg = self.rt.CreateSolidColorBrush(&to_f(color), None).ok()?;
+            let corner = s * shape::BADGE_CORNER_RATIO;
+            let rr = D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F { left: 0.5, top: 0.5, right: s - 0.5, bottom: s - 0.5 },
+                radiusX: corner,
+                radiusY: corner,
+            };
+            self.rt.FillRoundedRectangle(&rr, &bg);
+
+            let text_rgb = label_color.unwrap_or_else(|| shape::auto_text_color(color));
+            let text_brush = self.rt.CreateSolidColorBrush(&to_f(text_rgb), None).ok()?;
+            let font_size = shape::badge_font_size(s * 0.98, label.chars().count());
+            let format = self
+                .dwrite
+                .CreateTextFormat(
+                    w!("Yu Gothic UI"),
+                    None,
+                    DWRITE_FONT_WEIGHT_BOLD,
+                    DWRITE_FONT_STYLE_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    font_size,
+                    w!("ja-jp"),
+                )
+                .ok()?;
+            format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER).ok()?;
+            format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER).ok()?;
+            let utf16: Vec<u16> = label.encode_utf16().collect();
+            let layout = D2D_RECT_F { left: 0.0, top: 0.0, right: s, bottom: s };
+            self.rt.DrawText(
+                &utf16,
+                &format,
+                &layout,
+                &text_brush,
+                windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE,
+                windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
+            );
+            self.rt.EndDraw(None, None).ok()?;
+
+            // D2D はプリマルチプライド。アイコンはストレートアルファ前提なので戻す
+            let n = (self.size * self.size) as usize;
+            let px = std::slice::from_raw_parts_mut(self.bits, n * 4);
+            for p in px.as_chunks_mut::<4>().0 {
+                let a = p[3] as u32;
+                if a > 0 && a < 255 {
+                    p[0] = (p[0] as u32 * 255 / a).min(255) as u8;
+                    p[1] = (p[1] as u32 * 255 / a).min(255) as u8;
+                    p[2] = (p[2] as u32 * 255 / a).min(255) as u8;
+                }
+            }
+
+            // デバッグビルドでは検証用に BMP を書き出す
+            #[cfg(debug_assertions)]
+            self.dump_debug_bmp(px);
+
+            let mask = CreateBitmap(self.size, self.size, 1, 1, None);
+            let info = ICONINFO {
+                fIcon: true.into(),
+                hbmColor: self.dib,
+                hbmMask: mask,
+                ..Default::default()
+            };
+            let icon = CreateIconIndirect(&info).ok(); // ビットマップは複製される
+            let _ = DeleteObject(HGDIOBJ(mask.0));
+            icon
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn dump_debug_bmp(&self, px: &[u8]) {
+        let s = self.size;
+        let mut bmp = Vec::with_capacity(54 + px.len());
+        let data_len = px.len() as u32;
+        bmp.extend_from_slice(b"BM");
+        bmp.extend_from_slice(&(54 + data_len).to_le_bytes());
+        bmp.extend_from_slice(&[0; 4]);
+        bmp.extend_from_slice(&54u32.to_le_bytes());
+        bmp.extend_from_slice(&40u32.to_le_bytes());
+        bmp.extend_from_slice(&s.to_le_bytes());
+        bmp.extend_from_slice(&(-s).to_le_bytes()); // top-down
+        bmp.extend_from_slice(&1u16.to_le_bytes());
+        bmp.extend_from_slice(&32u16.to_le_bytes());
+        bmp.extend_from_slice(&[0; 24]);
+        bmp.extend_from_slice(px);
+        let path = std::env::temp_dir().join("isimeon_tray_dbg.bmp");
+        let _ = std::fs::write(path, bmp);
+    }
+}
+
+impl Drop for BadgeIconRenderer {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = DeleteObject(HGDIOBJ(self.dib.0));
+            let _ = DeleteDC(self.mem_dc);
+        }
     }
 }

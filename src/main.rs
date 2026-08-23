@@ -270,10 +270,16 @@ fn apply_state(app: &mut App, mode: ImeMode, caret: Option<caret::CaretInfo>) {
 
 fn update_tray(app: &mut App) {
     let setting = app.config.for_mode(app.current_mode);
-    let color = parse_rgb_hex(&setting.color).unwrap_or((0, 0, 0));
+    // 一時停止中はグレーにして「動いていない」ことを見せる
+    let color = if app.paused {
+        (0x80, 0x80, 0x80)
+    } else {
+        parse_rgb_hex(&setting.color).unwrap_or((0, 0, 0))
+    };
     let suffix = if app.paused { "(一時停止中)" } else { "" };
     let tip = format!("IsImeOn — {}{}", app.current_mode.display_name(), suffix);
-    app.tray.update(color, &tip);
+    app.tray
+        .update(color, &setting.label, parse_rgb_hex(&setting.label_color), &tip);
 }
 
 fn handle_command(hwnd: HWND, cmd: u32) {
