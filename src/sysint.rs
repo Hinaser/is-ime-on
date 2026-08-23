@@ -225,10 +225,10 @@ pub fn remove_traces() -> Vec<String> {
     let mut errors = Vec::new();
     remove_startup();
     let dir = crate::config::AppConfig::dir_path();
-    if dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&dir) {
-            errors.push(format!("{}: {e}", dir.display()));
-        }
+    if dir.exists()
+        && let Err(e) = std::fs::remove_dir_all(&dir)
+    {
+        errors.push(format!("{}: {e}", dir.display()));
     }
     errors
 }

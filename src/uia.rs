@@ -135,7 +135,7 @@ fn range_to_caret(range: &IUIAutomationTextRange) -> Option<CaretInfo> {
 }
 
 /// SAFEARRAY(f64) → Vec<f64>。所有権を受け取り破棄まで行う。
-unsafe fn bounding_rects(range: &IUIAutomationTextRange) -> Vec<f64> {
+unsafe fn bounding_rects(range: &IUIAutomationTextRange) -> Vec<f64> { unsafe {
     let Ok(psa) = range.GetBoundingRectangles() else {
         return Vec::new();
     };
@@ -155,4 +155,4 @@ unsafe fn bounding_rects(range: &IUIAutomationTextRange) -> Vec<f64> {
     }
     let _ = SafeArrayDestroy(psa);
     out
-}
+}}

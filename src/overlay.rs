@@ -122,10 +122,11 @@ impl Overlay {
 
     /// DIB を必要サイズ以上に確保(grow-only)。
     fn ensure_dib(&mut self, w: i32, h: i32) -> Result<()> {
-        if let Some((_, cw, ch)) = self.dib {
-            if cw >= w && ch >= h {
-                return Ok(());
-            }
+        if let Some((_, cw, ch)) = self.dib
+            && cw >= w
+            && ch >= h
+        {
+            return Ok(());
         }
         unsafe {
             if let Some((old, _, _)) = self.dib.take() {

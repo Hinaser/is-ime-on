@@ -1,7 +1,7 @@
 [package]
 name = "is-ime-on"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "IME-linked text caret indicator for Windows"
 license = "MIT"
 repository = "https://github.com/Hinaser/is-ime-on"
