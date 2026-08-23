@@ -5,4 +5,5 @@
 # バイナリ(将来アイコン等を追加する場合)
 *.png binary
 *.ico binary
+*.rgba binary
 *.exe binary

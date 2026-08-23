@@ -80,7 +80,12 @@ fn run_window() {
         wgpu_options,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([500.0, 532.0])
-            .with_title(WINDOW_TITLE),
+            .with_title(WINDOW_TITLE)
+            .with_icon(std::sync::Arc::new(egui::IconData {
+                rgba: include_bytes!("../assets/icon/icon-64.rgba").to_vec(),
+                width: 64,
+                height: 64,
+            })),
         ..Default::default()
     };
     let _ = eframe::run_native(

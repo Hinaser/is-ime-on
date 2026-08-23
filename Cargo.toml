@@ -47,6 +47,9 @@ features = [
     "Win32_UI_WindowsAndMessaging",
 ]
 
+[build-dependencies]
+winresource = "0.1"
+
 [profile.release]
 opt-level = "z"
 lto = true
