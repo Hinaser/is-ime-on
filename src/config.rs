@@ -161,7 +161,7 @@ impl Default for AppConfig {
             config_version: 1,
             modes: default_modes(),
             poll_interval_ms: 100,
-            shape: "teardrop".into(),
+            shape: "badge".into(),
             presets: Vec::new(),
         }
     }

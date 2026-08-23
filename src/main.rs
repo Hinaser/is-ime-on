@@ -30,7 +30,7 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, MessageBoxW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, MessageBoxW, PostMessageW,
     PostQuitMessage, RegisterClassW, TranslateMessage, EVENT_OBJECT_FOCUS,
     EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, MB_ICONINFORMATION, MB_OK, MSG,
     OBJID_CARET, WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_DESTROY,
@@ -153,8 +153,16 @@ fn main() {
     }
 }
 
+/// APP への可変アクセス。
+///
+/// モーダルなAPI(TrackPopupMenu / MessageBox など)は入れ子のメッセージループを回すため、
+/// 借用中に wndproc が再入しうる。二重借用でプロセスを落とさないよう try_borrow_mut を使い、
+/// 借用中の再入は「今回の更新を捨てる」で済ませる(状態は次の Tick で追いつく)。
 fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
-    APP.with(|cell| cell.borrow_mut().as_mut().map(f))
+    APP.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut slot) => slot.as_mut().map(f),
+        Err(_) => None,
+    })
 }
 
 extern "system" fn win_event_proc(
@@ -182,11 +190,25 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             });
             LRESULT(0)
         }
+        // 設定プロセスからの one-shot 要求。WM_APP_STATE と違い「次のTickで追いつく」が
+        // 効かないため、借用競合(モーダルループ中)で実行できなかった場合は再ポストして
+        // 取りこぼさない。
         settings::WM_APP_RELOAD => {
-            handle_command(hwnd, CMD_RELOAD);
+            let done = with_app(|app| {
+                app.config = AppConfig::load();
+                app.engine.set_visible_by_mode(visible_by_mode(&app.config));
+                update_tray(app);
+            })
+            .is_some();
+            if !done {
+                unsafe {
+                    let _ = PostMessageW(Some(hwnd), msg, wp, lp);
+                }
+            }
             LRESULT(0)
         }
         // 設定ウィンドウからのアンインストール要求。exe のロックを外すため終了する。
+        // DestroyWindow は借用不要なので競合の心配はない。
         settings::WM_APP_QUIT => {
             handle_command(hwnd, CMD_EXIT);
             LRESULT(0)
@@ -195,7 +217,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             let event = (lp.0 as u32) & 0xFFFF;
             match event {
                 WM_RBUTTONUP => {
-                    let cmd = with_app(|app| app.tray.show_menu(app.paused)).unwrap_or(0);
+                    // paused を読むだけの短い借用で済ませ、メニュー表示中は借用を持たない
+                    let paused = with_app(|app| app.paused).unwrap_or(false);
+                    let cmd = Tray::show_menu(hwnd, paused);
                     handle_command(hwnd, cmd);
                 }
                 WM_LBUTTONDBLCLK => handle_command(hwnd, CMD_OPEN),
@@ -204,7 +228,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             LRESULT(0)
         }
         WM_DESTROY => {
-            APP.with(|cell| cell.borrow_mut().take()); // Drop: トレイ削除・エンジン停止・オーバーレイ破棄
+            // Drop: トレイ削除・エンジン停止・オーバーレイ破棄。
+            // 万一借用中でもパニック(=abort)せず、後始末をスキップして終了を優先する
+            APP.with(|cell| {
+                if let Ok(mut slot) = cell.try_borrow_mut() {
+                    slot.take();
+                }
+            });
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }

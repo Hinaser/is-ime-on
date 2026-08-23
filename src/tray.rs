@@ -66,7 +66,12 @@ impl Tray {
     }
 
     /// 右クリックメニューを表示し、選ばれたコマンドID(CMD_*)を返す。0 = 選択なし。
-    pub fn show_menu(&self, paused: bool) -> u32 {
+    ///
+    /// TrackPopupMenu は入れ子のメッセージループを回すため、この関数の実行中に
+    /// wndproc が再入する。App の RefCell を借りたまま呼ぶと二重借用でパニックする
+    /// (release は panic=abort なのでプロセスごと落ちる)ので、
+    /// あえて &self を取らず hwnd と paused だけで動くようにしてある。
+    pub fn show_menu(hwnd: HWND, paused: bool) -> u32 {
         unsafe {
             let Ok(menu) = CreatePopupMenu() else {
                 return 0;
@@ -81,14 +86,14 @@ impl Tray {
             let mut pt = POINT::default();
             let _ = GetCursorPos(&mut pt);
             // メニューを閉じられるようにするための定石
-            let _ = SetForegroundWindow(self.hwnd);
+            let _ = SetForegroundWindow(hwnd);
             let cmd = TrackPopupMenu(
                 menu,
                 TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
                 pt.x,
                 pt.y,
                 Some(0),
-                self.hwnd,
+                hwnd,
                 None,
             );
             let _ = DestroyMenu(menu);

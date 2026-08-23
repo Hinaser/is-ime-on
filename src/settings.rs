@@ -10,10 +10,11 @@ use crate::sysint;
 use eframe::egui::{self, Color32, ComboBox, FontId, RichText, Slider, Stroke};
 use std::time::{Duration, Instant};
 use windows::core::w;
-use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, LPARAM, WPARAM};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, PostMessageW, SetForegroundWindow, WM_APP,
+    CreateCaret, DestroyCaret, FindWindowW, PostMessageW, SetCaretPos, SetForegroundWindow, WM_APP,
 };
 
 /// 設定が保存されたとき常駐プロセスのメインウィンドウへ届くメッセージ(再読込を促す)。
@@ -62,7 +63,21 @@ fn post_to_main(msg: u32) {
 }
 
 fn run_window() {
+    // DX12 を明示する(Win10+ なら常に使える)。既定の backends は PRIMARY|GL だが、
+    // コンパイルされているのが Vulkan/GL だけだと、Vulkan ドライバが貧弱な安価な
+    // ラップトップで GL に落ち、デスクトップ全体のちらつき(1fps提示に引きずられる)が再発する。
+    let wgpu_options = eframe::egui_wgpu::WgpuConfiguration {
+        wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(eframe::egui_wgpu::WgpuSetupCreateNew {
+            instance_descriptor: wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::DX12 | wgpu::Backends::GL,
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
     let options = eframe::NativeOptions {
+        wgpu_options,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([500.0, 532.0])
             .with_title(WINDOW_TITLE),
@@ -73,9 +88,17 @@ fn run_window() {
         options,
         Box::new(move |cc| {
             install_jp_fonts(&cc.egui_ctx);
-            Ok(Box::new(SettingsApp::new()))
+            Ok(Box::new(SettingsApp::new(window_hwnd(cc))))
         }),
     );
+}
+
+/// eframe が作ったウィンドウの HWND(システムキャレットの作成先)。
+fn window_hwnd(cc: &eframe::CreationContext<'_>) -> Option<HWND> {
+    match cc.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => Some(HWND(h.hwnd.get() as *mut std::ffi::c_void)),
+        _ => None,
+    }
 }
 
 /// egui 標準フォントは CJK を含まないため、システムの日本語フォントを追加する。
@@ -132,13 +155,21 @@ struct SettingsApp {
     startup_is_current: bool,
     /// 「完全に削除して終了」の確認待ち
     confirm_uninstall: bool,
+    /// 「試し打ち」用にシステムキャレットを作るウィンドウ
+    hwnd: Option<HWND>,
+    caret_active: bool,
+    /// 現在のシステムキャレットの高さ(px)。DPI変化の検出用
+    caret_height: i32,
     os_indicator: bool,
     last_sys_check: Instant,
 }
 
 impl SettingsApp {
-    fn new() -> SettingsApp {
+    fn new(hwnd: Option<HWND>) -> SettingsApp {
         SettingsApp {
+            hwnd,
+            caret_active: false,
+            caret_height: 0,
             config: AppConfig::load(),
             selected: ImeMode::Hiragana,
             trial: String::new(),
@@ -171,6 +202,11 @@ impl eframe::App for SettingsApp {
             self.os_indicator = sysint::is_os_indicator_active();
             self.last_sys_check = Instant::now();
         }
+        // NVIDIA + OpenGL + 可変リフレッシュレート(G-SYNC等)の環境では、
+        // デスクトップのリフレッシュが「フォーカス中のGLウィンドウの提示レート」に
+        // 引きずられる。省電力目的で 1fps 程度に落とすと画面全体がちらついて見えるため、
+        // このウィンドウが開いている間は通常のフレームレートで描画し続ける。
+        // (常駐コアとは別プロセスなので、閉じればこのコストは完全に消える)
         ctx.request_repaint_after(Duration::from_secs(2));
 
         let before = self.config.clone();
@@ -182,7 +218,7 @@ impl eframe::App for SettingsApp {
                 ui.separator();
                 self.ui_mode_table(ui);
                 ui.separator();
-                self.ui_preview(ui);
+                self.ui_preview(ui, ctx);
                 ui.separator();
                 self.ui_presets(ui);
                 ui.separator();
@@ -325,7 +361,7 @@ impl SettingsApp {
             });
     }
 
-    fn ui_preview(&mut self, ui: &mut egui::Ui) {
+    fn ui_preview(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let shape = self.config.shape_enum();
         let mode = self.selected;
         let setting = self.config.for_mode(mode);
@@ -337,13 +373,70 @@ impl SettingsApp {
             ui.add_space(12.0);
             ui.vertical(|ui| {
                 ui.label("試し打ち(IMEを切り替えて確認):");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.trial)
-                        .desired_width(220.0)
-                        .hint_text("ここで入力"),
-                );
+                let out = egui::TextEdit::singleline(&mut self.trial)
+                    .desired_width(220.0)
+                    .hint_text("ここで入力")
+                    .show(ui);
+                self.sync_system_caret(ctx, &out);
             });
         });
+    }
+
+    /// egui は自前でキャレットを描くだけで、OS にはキャレットを公開しない。
+    /// そのままでは本ソフト自身のインジケーターが「試し打ち」欄に出ないため、
+    /// フォーカス中だけ同じ位置にシステムキャレットを作って位置を知らせる。
+    /// ShowCaret は呼ばない(呼ぶと egui のキャレットと二重に描画されるため)。
+    fn sync_system_caret(&mut self, ctx: &egui::Context, out: &egui::text_edit::TextEditOutput) {
+        let Some(hwnd) = self.hwnd else { return };
+        let cursor = if out.response.has_focus() {
+            out.cursor_range.map(|r| r.primary)
+        } else {
+            None
+        };
+        let Some(cursor) = cursor else {
+            self.destroy_system_caret();
+            return;
+        };
+
+        let rect = out
+            .galley
+            .pos_from_cursor(&cursor)
+            .translate(out.galley_pos.to_vec2());
+        // ScrollArea で欄が見えない位置へスクロールされてもフォーカスは残る。
+        // そのまま公開すると無関係な場所にインジケーターが出るため、見えている間だけ公開する。
+        if !out.text_clip_rect.intersects(rect) {
+            self.destroy_system_caret();
+            return;
+        }
+        let ppp = ctx.pixels_per_point();
+        let x = (rect.left() * ppp).round() as i32;
+        let y = (rect.top() * ppp).round() as i32;
+        let h = (rect.height().max(1.0) * ppp).round() as i32;
+        unsafe {
+            // SetCaretPos はサイズを変えられないので、DPI変化などで高さが変わったら作り直す
+            if self.caret_active && self.caret_height != h {
+                let _ = DestroyCaret();
+                self.caret_active = false;
+            }
+            if !self.caret_active {
+                self.caret_active = CreateCaret(hwnd, None, 1, h).is_ok();
+                self.caret_height = h;
+            }
+            if self.caret_active {
+                let _ = SetCaretPos(x, y);
+            }
+        }
+    }
+
+    fn destroy_system_caret(&mut self) {
+        if self.caret_active {
+            // 失敗しても active のままにしない: キャレットはフォーカス移動で
+            // OS 側でも破棄されるため、こちらの所有権記録だけ確実に手放す
+            unsafe {
+                let _ = DestroyCaret();
+            }
+            self.caret_active = false;
+        }
     }
 
     fn ui_presets(&mut self, ui: &mut egui::Ui) {
