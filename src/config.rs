@@ -72,7 +72,6 @@ impl ImeMode {
 pub enum IndicatorShape {
     Teardrop,
     TopCircle,
-    MidCircle,
     Badge,
 }
 
@@ -80,7 +79,6 @@ impl IndicatorShape {
     pub fn parse(s: &str) -> IndicatorShape {
         match s.to_ascii_lowercase().as_str() {
             "topcircle" => IndicatorShape::TopCircle,
-            "midcircle" => IndicatorShape::MidCircle,
             "badge" => IndicatorShape::Badge,
             _ => IndicatorShape::Teardrop,
         }
@@ -90,7 +88,6 @@ impl IndicatorShape {
         match self {
             IndicatorShape::Teardrop => "teardrop",
             IndicatorShape::TopCircle => "topcircle",
-            IndicatorShape::MidCircle => "midcircle",
             IndicatorShape::Badge => "badge",
         }
     }
@@ -150,7 +147,7 @@ pub struct AppConfig {
     pub config_version: i32,
     pub modes: BTreeMap<String, ModeSetting>,
     pub poll_interval_ms: i32,
-    /// "teardrop" | "topcircle" | "midcircle" | "badge"
+    /// "teardrop" | "topcircle" | "badge"
     pub shape: String,
     pub presets: Vec<Preset>,
 }
@@ -260,7 +257,6 @@ mod tests {
         for shape in [
             IndicatorShape::Teardrop,
             IndicatorShape::TopCircle,
-            IndicatorShape::MidCircle,
             IndicatorShape::Badge,
         ] {
             assert_eq!(IndicatorShape::parse(shape.to_config_str()), shape);

@@ -9,8 +9,6 @@ const TOP_OFFSET: f32 = 0.55;
 /// しずく下側の丸の半径比と、キャレット下端からの離し具合。
 const LOWER_RATIO: f32 = 0.62;
 const LOWER_OFFSET: f32 = 0.7;
-/// 「丸(中央)」の塗りの不透明度。
-pub const MID_CIRCLE_ALPHA: f32 = 0.55;
 /// バッジの角丸半径(辺長比)とキャレットとの隙間。
 pub const BADGE_CORNER_RATIO: f32 = 0.18;
 pub const BADGE_GAP: f32 = 2.0;
@@ -61,11 +59,6 @@ pub fn top_circle(r: f32, cx: f32, caret_top: f32) -> Circle {
 pub fn lower_circle(r: f32, cx: f32, caret_bottom: f32) -> Circle {
     let r2 = r * LOWER_RATIO;
     (cx, caret_bottom + r2 * LOWER_OFFSET, r2)
-}
-
-/// キャレット中央に重ねる丸。
-pub fn mid_circle(r: f32, cx: f32, caret_top: f32, caret_bottom: f32) -> Circle {
-    (cx, (caret_top + caret_bottom) / 2.0, r)
 }
 
 /// バッジ矩形の左上座標(辺長は Metrics::badge_side)。
@@ -133,13 +126,11 @@ mod tests {
         let (lx, ly, lr) = lower_circle(r, cx, bottom);
         assert_eq!((lx, lr), (50.0, 10.0 * 0.62));
         assert_eq!(ly, 120.0 + (10.0 * 0.62) * 0.7);
-        assert_eq!(mid_circle(r, cx, top, bottom), (50.0, 110.0, 10.0));
 
         assert_eq!(badge_origin(24.0, 50.0, 100.0), (50.0 - 12.0, 100.0 - 2.0 - 24.0));
         assert_eq!(badge_font_size(24.0, 1), 24.0 * 0.66);
         assert_eq!(badge_font_size(24.0, 2), 24.0 * 0.48);
         assert_eq!(BADGE_CORNER_RATIO, 0.18);
-        assert_eq!(MID_CIRCLE_ALPHA, 0.55);
     }
 
     #[test]

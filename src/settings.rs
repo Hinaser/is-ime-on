@@ -202,12 +202,21 @@ impl eframe::App for SettingsApp {
             self.os_indicator = sysint::is_os_indicator_active();
             self.last_sys_check = Instant::now();
         }
-        // NVIDIA + OpenGL + 可変リフレッシュレート(G-SYNC等)の環境では、
-        // デスクトップのリフレッシュが「フォーカス中のGLウィンドウの提示レート」に
-        // 引きずられる。省電力目的で 1fps 程度に落とすと画面全体がちらついて見えるため、
-        // このウィンドウが開いている間は通常のフレームレートで描画し続ける。
-        // (常駐コアとは別プロセスなので、閉じればこのコストは完全に消える)
-        ctx.request_repaint_after(Duration::from_secs(2));
+        // 可変リフレッシュレート(G-SYNC等)の環境では、フォーカス中ウィンドウの
+        // 提示レートにディスプレイのリフレッシュが追従する。キャレット点滅などで
+        // 1〜2fps だけ提示すると、リフレッシュが最低値まで落ちてパネル全体が
+        // ちらついて見える(VRRの低レート輝度フリッカ)。レートが一定なら
+        // ちらつかないため、開いている間は 60fps で提示し続ける。
+        // DX12 の Present は正しくブロックするので CPU はほぼ消費しない
+        // (GL は SwapBuffers がビジーウェイトで1コア使い切るため不可)。
+        // 常駐コアとは別プロセスなので、閉じればこのコストは完全に消える。
+        // VRRが追従するのはフォーカス中のウィンドウだけなので、
+        // フォーカスを失っている間は低頻度に戻して無駄な描画をやめる。
+        if ctx.input(|i| i.focused) {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        } else {
+            ctx.request_repaint_after(Duration::from_secs(2));
+        }
 
         let before = self.config.clone();
 
@@ -270,7 +279,6 @@ impl SettingsApp {
                     for s in [
                         IndicatorShape::Teardrop,
                         IndicatorShape::TopCircle,
-                        IndicatorShape::MidCircle,
                         IndicatorShape::Badge,
                     ] {
                         ui.selectable_value(&mut shape, s, shape_label(s));
@@ -377,6 +385,12 @@ impl SettingsApp {
                     .desired_width(220.0)
                     .hint_text("ここで入力")
                     .show(ui);
+                // IME の変換確定 Enter も egui には Enter として届き、singleline は
+                // フォーカスを手放してしまう。試し打ち欄は連続入力する場所なので、
+                // Enter でフォーカスが外れたら握り直す
+                if out.response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    out.response.request_focus();
+                }
                 self.sync_system_caret(ctx, &out);
             });
         });
@@ -611,7 +625,6 @@ fn shape_label(shape: IndicatorShape) -> &'static str {
     match shape {
         IndicatorShape::Teardrop => "しずく(OS風・上下)",
         IndicatorShape::TopCircle => "丸(上)",
-        IndicatorShape::MidCircle => "丸(中央・半透明)",
         IndicatorShape::Badge => "文字バッジ",
     }
 }
@@ -677,16 +690,6 @@ fn draw_preview(ui: &mut egui::Ui, setting: &crate::config::ModeSetting, shape: 
         IndicatorShape::TopCircle => {
             let top = shape::top_circle(r, cx, caret_top);
             p.circle_filled(circle(top), top.2, color);
-        }
-        IndicatorShape::MidCircle => {
-            let mid = shape::mid_circle(r, cx, caret_top, caret_bottom);
-            let alpha = (shape::MID_CIRCLE_ALPHA * 255.0) as u8;
-            p.circle_filled(
-                circle(mid),
-                mid.2,
-                Color32::from_rgba_unmultiplied(rgb.0, rgb.1, rgb.2, alpha),
-            );
-            p.circle_stroke(circle(mid), mid.2, Stroke::new(1.2, color));
         }
         IndicatorShape::Badge => {
             let side = metrics.badge_side;

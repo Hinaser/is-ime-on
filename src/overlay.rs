@@ -211,14 +211,6 @@ impl Overlay {
                 IndicatorShape::TopCircle => {
                     self.rt.FillEllipse(&ellipse(shape::top_circle(r, cx, caret_top)), &brush);
                 }
-                IndicatorShape::MidCircle => {
-                    let translucent = self
-                        .rt
-                        .CreateSolidColorBrush(&color_f(p.color, shape::MID_CIRCLE_ALPHA), None)?;
-                    let e = ellipse(shape::mid_circle(r, cx, caret_top, caret_bottom));
-                    self.rt.FillEllipse(&e, &translucent);
-                    self.rt.DrawEllipse(&e, &brush, 1.2, None);
-                }
                 IndicatorShape::Badge => {
                     self.draw_badge(p, metrics.badge_side, cx, caret_top)?;
                 }
