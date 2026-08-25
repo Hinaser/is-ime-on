@@ -4,7 +4,7 @@
 #   manifests/h/Hinaser/IsImeOn/<version>/ に3ファイル(version/installer/locale)を置く。
 # InstallerSha256 はリリースの SHA256SUMS.txt の値をそのまま使う。
 PackageIdentifier: Hinaser.IsImeOn
-PackageVersion: 0.1.0
+PackageVersion: 0.1.1
 DefaultLocale: ja-JP
 ManifestType: version
 ManifestVersion: 1.6.0

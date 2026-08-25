@@ -1,6 +1,6 @@
 [package]
 name = "is-ime-on"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 # as_chunks(1.88安定化)を使用
 rust-version = "1.88"

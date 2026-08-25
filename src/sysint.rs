@@ -217,9 +217,20 @@ pub fn is_winget_managed() -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
-    exe.to_string_lossy()
-        .to_lowercase()
-        .contains(r"\microsoft\winget\packages\")
+    // コマンドエイリアス経由の起動では current_exe が
+    // ...\Microsoft\WinGet\Links\ のシンボリックリンクを指す(Packages ではない)。
+    // リンク解決後のパスも見て、どちらかが WinGet 配下なら管理下とみなす。
+    if is_winget_path(&exe.to_string_lossy()) {
+        return true;
+    }
+    match std::fs::canonicalize(&exe) {
+        Ok(real) => is_winget_path(&real.to_string_lossy()),
+        Err(_) => false,
+    }
+}
+
+fn is_winget_path(path: &str) -> bool {
+    path.to_lowercase().contains(r"\microsoft\winget\")
 }
 
 /// 自動起動の登録と設定ファイルを削除する。戻り値は失敗した項目の説明。
@@ -253,4 +264,31 @@ pub fn schedule_self_delete() -> bool {
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
         .spawn()
         .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn winget_paths_are_detected() {
+        // Packages 直接起動
+        assert!(is_winget_path(
+            r"C:\Users\a\AppData\Local\Microsoft\WinGet\Packages\Hinaser.IsImeOn__DefaultSource\IsImeOn\IsImeOn.exe"
+        ));
+        // コマンドエイリアス(Links のシンボリックリンク)経由
+        assert!(is_winget_path(
+            r"C:\Users\a\AppData\Local\Microsoft\WinGet\Links\IsImeOn.exe"
+        ));
+        // 大文字小文字は区別しない
+        assert!(is_winget_path(r"c:\users\a\appdata\local\microsoft\winget\links\isimeon.exe"));
+    }
+
+    #[test]
+    fn normal_paths_are_not_detected() {
+        assert!(!is_winget_path(r"C:\Users\a\AppData\Local\Programs\IsImeOn\IsImeOn.exe"));
+        assert!(!is_winget_path(r"C:\Tools\IsImeOn.exe"));
+        // 紛らわしいが WinGet 配下ではない
+        assert!(!is_winget_path(r"C:\microsoft\winget-lookalike\IsImeOn.exe"));
+    }
 }
