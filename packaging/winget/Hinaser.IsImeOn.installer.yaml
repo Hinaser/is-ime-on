@@ -8,6 +8,6 @@ NestedInstallerFiles:
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/Hinaser/is-ime-on/releases/download/v0.1.0/IsImeOn-0.1.0-win-x64.zip
-    InstallerSha256: <リリースの SHA256SUMS.txt から転記>
+    InstallerSha256: BCF31E6D9D0AC0D476B4BD39D5B5039A72F364EB6C9B107FC944E72BBAF4242D
 ManifestType: installer
 ManifestVersion: 1.6.0
