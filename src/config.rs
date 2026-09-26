@@ -54,16 +54,9 @@ impl ImeMode {
         }
     }
 
+    /// 現在の UI 言語での表示名。
     pub fn display_name(self) -> &'static str {
-        match self {
-            ImeMode::Off => "IMEオフ",
-            ImeMode::Other => "その他",
-            ImeMode::HalfAlnum => "半角英数",
-            ImeMode::HalfKana => "半角カタカナ",
-            ImeMode::WideAlnum => "全角英数",
-            ImeMode::Hiragana => "ひらがな",
-            ImeMode::WideKana => "全角カタカナ",
-        }
+        crate::i18n::tr().mode_names[self.index()]
     }
 }
 
@@ -175,6 +168,8 @@ pub struct AppConfig {
     pub shape: String,
     /// "above" | "below"
     pub position: String,
+    /// UI 言語。"auto" | "ja" | "en"
+    pub language: String,
     pub presets: Vec<Preset>,
 }
 
@@ -186,6 +181,7 @@ impl Default for AppConfig {
             poll_interval_ms: 100,
             shape: "badge".into(),
             position: "above".into(),
+            language: "auto".into(),
             presets: Vec::new(),
         }
     }
@@ -220,6 +216,15 @@ impl AppConfig {
 
     pub fn position_enum(&self) -> IndicatorPosition {
         IndicatorPosition::parse(&self.position)
+    }
+
+    pub fn language_enum(&self) -> crate::i18n::LangSetting {
+        crate::i18n::LangSetting::parse(&self.language)
+    }
+
+    /// 設定の言語を UI 言語として反映する。
+    pub fn apply_language(&self) {
+        crate::i18n::set(self.language_enum().resolve());
     }
 
     pub fn for_mode(&self, mode: ImeMode) -> ModeSetting {

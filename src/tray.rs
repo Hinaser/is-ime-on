@@ -4,7 +4,7 @@
 //! レンダリングする(高DPIでも滲まない)。
 
 use crate::shape;
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
@@ -162,12 +162,15 @@ impl Tray {
             let Ok(menu) = CreatePopupMenu() else {
                 return 0;
             };
-            let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN as usize, w!("設定を開く(&O)"));
-            let _ = AppendMenuW(menu, MF_STRING, CMD_RELOAD as usize, w!("設定を再読込(&R)"));
+            let t = crate::i18n::tr();
+            let [open, reload, pause, exit] =
+                [t.tray_open, t.tray_reload, t.tray_pause, t.tray_exit].map(wide);
+            let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN as usize, PCWSTR(open.as_ptr()));
+            let _ = AppendMenuW(menu, MF_STRING, CMD_RELOAD as usize, PCWSTR(reload.as_ptr()));
             let pause_flags = if paused { MF_STRING | MF_CHECKED } else { MF_STRING };
-            let _ = AppendMenuW(menu, pause_flags, CMD_PAUSE as usize, w!("一時停止(&P)"));
+            let _ = AppendMenuW(menu, pause_flags, CMD_PAUSE as usize, PCWSTR(pause.as_ptr()));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-            let _ = AppendMenuW(menu, MF_STRING, CMD_EXIT as usize, w!("終了(&X)"));
+            let _ = AppendMenuW(menu, MF_STRING, CMD_EXIT as usize, PCWSTR(exit.as_ptr()));
 
             let mut pt = POINT::default();
             let _ = GetCursorPos(&mut pt);
@@ -198,6 +201,11 @@ impl Drop for Tray {
             }
         }
     }
+}
+
+/// NUL 終端の UTF-16。
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain([0]).collect()
 }
 
 fn base_nid(hwnd: HWND) -> NOTIFYICONDATAW {

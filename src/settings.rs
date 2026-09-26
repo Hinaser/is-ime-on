@@ -7,6 +7,7 @@
 use crate::config::{
     parse_rgb_hex, to_rgb_hex, AppConfig, ImeMode, IndicatorPosition, IndicatorShape, Preset,
 };
+use crate::i18n::{self, tr, LangSetting};
 use crate::shape::{self, Metrics};
 use crate::sysint;
 use eframe::egui::{self, Color32, ComboBox, FontId, RichText, Slider, Stroke};
@@ -24,7 +25,7 @@ pub const WM_APP_RELOAD: u32 = WM_APP + 3;
 /// アンインストール時に常駐プロセスへ終了を要求するメッセージ。
 pub const WM_APP_QUIT: u32 = WM_APP + 4;
 
-const WINDOW_TITLE: &str = "IsImeOn — 設定";
+const WINDOW_HEIGHT: f32 = 560.0;
 
 /// 設定ウィンドウを開く(設定プロセスを起動する)。既に開いていれば子プロセス側が前面化して終了する。
 pub fn open() {
@@ -39,11 +40,13 @@ pub fn run_settings_process() {
         // 設定ウィンドウの二重起動防止(既存があれば前面化のみ)
         let _mutex = CreateMutexW(None, true, w!("Local\\IsImeOn_Settings"));
         if GetLastError() == ERROR_ALREADY_EXISTS {
-            let title: Vec<u16> = WINDOW_TITLE.encode_utf16().chain([0]).collect();
-            if let Ok(existing) =
-                FindWindowW(None, windows::core::PCWSTR(title.as_ptr()))
-            {
-                let _ = SetForegroundWindow(existing);
+            // 既存ウィンドウは別の言語で開かれているかもしれないので両方の題名で探す
+            for title in [i18n::JA.window_title, i18n::EN.window_title] {
+                let title: Vec<u16> = title.encode_utf16().chain([0]).collect();
+                if let Ok(existing) = FindWindowW(None, windows::core::PCWSTR(title.as_ptr())) {
+                    let _ = SetForegroundWindow(existing);
+                    break;
+                }
             }
             return;
         }
@@ -81,8 +84,8 @@ fn run_window() {
     let options = eframe::NativeOptions {
         wgpu_options,
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([500.0, 532.0])
-            .with_title(WINDOW_TITLE)
+            .with_inner_size([tr().window_width, WINDOW_HEIGHT])
+            .with_title(tr().window_title)
             .with_icon(std::sync::Arc::new(egui::IconData {
                 rgba: include_bytes!("../assets/icon/icon-64.rgba").to_vec(),
                 width: 64,
@@ -238,6 +241,7 @@ impl eframe::App for SettingsApp {
                 ui.separator();
                 self.ui_presets(ui);
                 ui.separator();
+                self.ui_language(ui, ctx);
                 self.ui_startup(ui);
                 self.ui_uninstall(ui);
                 if !self.status.is_empty() {
@@ -248,7 +252,7 @@ impl eframe::App for SettingsApp {
         });
 
         if self.config != before {
-            self.save_and_apply("変更を適用・保存しました");
+            self.save_and_apply(tr().saved);
         }
     }
 }
@@ -261,14 +265,14 @@ impl SettingsApp {
         egui::Frame::group(ui.style())
             .fill(Color32::from_rgb(0x5A, 0x46, 0x00))
             .show(ui, |ui| {
-                ui.label("⚠ Windows標準のテキストカーソルインジケーターが動作中です。二重表示になるため停止を推奨します。");
+                ui.label(tr().os_indicator_warning);
                 ui.horizontal(|ui| {
-                    if ui.button("停止する").clicked() {
+                    if ui.button(tr().os_indicator_stop).clicked() {
                         sysint::stop_os_indicator();
                         self.os_indicator = sysint::is_os_indicator_active();
-                        self.status = "OS標準インジケーターを停止しました".into();
+                        self.status = tr().os_indicator_stopped.into();
                     }
-                    if ui.button("Windowsの設定を開く").clicked() {
+                    if ui.button(tr().open_windows_settings).clicked() {
                         sysint::open_cursor_settings();
                     }
                 });
@@ -278,7 +282,7 @@ impl SettingsApp {
 
     fn ui_shape(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label("形状:");
+            ui.label(tr().shape);
             let mut shape = self.config.shape_enum();
             ComboBox::from_id_salt("shape")
                 .selected_text(shape_label(shape))
@@ -296,10 +300,10 @@ impl SettingsApp {
             }
 
             ui.add_space(12.0);
-            ui.label("位置:");
+            ui.label(tr().position);
             let mut position = self.config.position_enum();
-            ui.selectable_value(&mut position, IndicatorPosition::Above, "キャレットの上");
-            ui.selectable_value(&mut position, IndicatorPosition::Below, "キャレットの下");
+            ui.selectable_value(&mut position, IndicatorPosition::Above, tr().position_above);
+            ui.selectable_value(&mut position, IndicatorPosition::Below, tr().position_below);
             if position != self.config.position_enum() {
                 self.config.position = position.to_config_str().into();
             }
@@ -312,13 +316,14 @@ impl SettingsApp {
             .striped(true)
             .min_col_width(40.0)
             .show(ui, |ui| {
-                ui.label(RichText::new("モード").strong());
-                ui.label(RichText::new("表示").strong());
-                ui.label(RichText::new("色").strong());
-                ui.label(RichText::new("サイズ").strong());
+                let t = tr();
+                ui.label(RichText::new(t.col_mode).strong());
+                ui.label(RichText::new(t.col_visible).strong());
+                ui.label(RichText::new(t.col_color).strong());
+                ui.label(RichText::new(t.col_size).strong());
                 if is_badge {
-                    ui.label(RichText::new("バッジ文字").strong());
-                    ui.label(RichText::new("文字色").strong());
+                    ui.label(RichText::new(t.col_badge_text).strong());
+                    ui.label(RichText::new(t.col_text_color).strong());
                 }
                 ui.end_row();
 
@@ -366,7 +371,7 @@ impl SettingsApp {
                             _ => 0,
                         };
                         let mut idx = old_idx;
-                        let names = ["自動", "白", "黒"];
+                        let names = tr().text_colors;
                         ComboBox::from_id_salt(format!("lc{i}"))
                             .selected_text(names[idx])
                             .width(56.0)
@@ -392,15 +397,15 @@ impl SettingsApp {
         let setting = self.config.for_mode(mode);
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(format!("プレビュー: {}", mode.display_name()));
+                ui.label((tr().preview)(mode.display_name()));
                 draw_preview(ui, &setting, shape, position);
             });
             ui.add_space(12.0);
             ui.vertical(|ui| {
-                ui.label("試し打ち(IMEを切り替えて確認):");
+                ui.label(tr().trial);
                 let out = egui::TextEdit::singleline(&mut self.trial)
                     .desired_width(220.0)
-                    .hint_text("ここで入力")
+                    .hint_text(tr().trial_hint)
                     .show(ui);
                 // IME の変換確定 Enter も egui には Enter として届き、singleline は
                 // フォーカスを手放してしまう。試し打ち欄は連続入力する場所なので、
@@ -471,13 +476,13 @@ impl SettingsApp {
     }
 
     fn ui_presets(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("プリセット").strong());
+        ui.label(RichText::new(tr().presets).strong());
         ui.horizontal(|ui| {
             let names: Vec<String> = self.config.presets.iter().map(|p| p.name.clone()).collect();
             let current = names
                 .get(self.selected_preset)
                 .cloned()
-                .unwrap_or_else(|| "(なし)".into());
+                .unwrap_or_else(|| tr().preset_none.into());
             ComboBox::from_id_salt("preset")
                 .selected_text(current)
                 .show_ui(ui, |ui| {
@@ -486,27 +491,27 @@ impl SettingsApp {
                     }
                 });
             let has = self.selected_preset < self.config.presets.len();
-            if ui.add_enabled(has, egui::Button::new("適用")).clicked() {
+            if ui.add_enabled(has, egui::Button::new(tr().preset_apply)).clicked() {
                 let preset = self.config.presets[self.selected_preset].clone();
                 apply_preset(&mut self.config, &preset);
-                self.status = format!("プリセット「{}」を適用しました", preset.name);
+                self.status = (tr().preset_applied)(&preset.name);
             }
-            if ui.add_enabled(has, egui::Button::new("削除")).clicked() {
+            if ui.add_enabled(has, egui::Button::new(tr().preset_delete)).clicked() {
                 let removed = self.config.presets.remove(self.selected_preset);
                 self.selected_preset = 0;
-                self.status = format!("プリセット「{}」を削除しました", removed.name);
+                self.status = (tr().preset_deleted)(&removed.name);
             }
         });
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.preset_name)
                     .desired_width(160.0)
-                    .hint_text("プリセット名"),
+                    .hint_text(tr().preset_name_hint),
             );
-            if ui.button("現在の設定を保存").clicked() {
+            if ui.button(tr().preset_save).clicked() {
                 let name = self.preset_name.trim().to_string();
                 if name.is_empty() {
-                    self.status = "プリセット名を入力してください".into();
+                    self.status = tr().preset_name_required.into();
                 } else {
                     let preset = Preset {
                         name: name.clone(),
@@ -515,8 +520,32 @@ impl SettingsApp {
                     self.config.presets.retain(|p| p.name != name);
                     self.config.presets.push(preset);
                     self.selected_preset = self.config.presets.len() - 1;
-                    self.status = format!("プリセット「{name}」を保存しました");
+                    self.status = (tr().preset_saved)(&name);
                 }
+            }
+        });
+    }
+
+    fn ui_language(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.horizontal(|ui| {
+            // どの言語で表示中でも見つけられるよう、見出しは日英併記
+            ui.label(tr().language);
+            let mut lang = self.config.language_enum();
+            ComboBox::from_id_salt("language")
+                .selected_text(lang.label())
+                .show_ui(ui, |ui| {
+                    for l in LangSetting::ALL {
+                        ui.selectable_value(&mut lang, l, l.label());
+                    }
+                });
+            if lang != self.config.language_enum() {
+                self.config.language = lang.to_config_str().into();
+                self.config.apply_language();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(tr().window_title.into()));
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                    tr().window_width,
+                    WINDOW_HEIGHT,
+                )));
             }
         });
     }
@@ -524,35 +553,35 @@ impl SettingsApp {
     fn ui_startup(&mut self, ui: &mut egui::Ui) {
         let mut startup = self.startup;
         if ui
-            .checkbox(&mut startup, "サインイン時に自動起動する")
+            .checkbox(&mut startup, tr().startup)
             .changed()
         {
             if startup {
                 if sysint::set_startup() {
-                    self.status = "スタートアップに登録しました".into();
+                    self.status = tr().startup_added.into();
                 } else {
-                    self.status = "スタートアップ登録に失敗しました".into();
+                    self.status = tr().startup_failed.into();
                 }
             } else {
                 sysint::remove_startup();
-                self.status = "スタートアップ登録を解除しました".into();
+                self.status = tr().startup_removed.into();
             }
             self.refresh_startup_state();
         }
 
         // Windows は登録時の絶対パスをそのまま起動するので、どこを指しているかを見せる
         if let Some(path) = self.startup_path.clone() {
-            ui.label(RichText::new(format!("登録先: {path}")).weak().small());
+            ui.label(RichText::new((tr().startup_path)(&path)).weak().small());
             if !self.startup_is_current {
                 ui.horizontal(|ui| {
                     ui.colored_label(
                         Color32::from_rgb(0xE0, 0xA0, 0x30),
-                        "⚠ 別の場所の exe が登録されています(このままでは自動起動しません)",
+                        tr().startup_other_exe,
                     );
-                    if ui.button("この exe に登録し直す").clicked() {
+                    if ui.button(tr().startup_reregister).clicked() {
                         sysint::set_startup();
                         self.refresh_startup_state();
-                        self.status = "登録先を更新しました".into();
+                        self.status = tr().startup_updated.into();
                     }
                 });
             }
@@ -561,24 +590,19 @@ impl SettingsApp {
 
     fn ui_uninstall(&mut self, ui: &mut egui::Ui) {
         ui.separator();
-        ui.label(RichText::new("アンインストール").strong());
+        ui.label(RichText::new(tr().uninstall).strong());
 
         if sysint::is_winget_managed() {
-            ui.label(
-                RichText::new(
-                    "winget で導入されています。削除は `winget uninstall Hinaser.IsImeOn` を使ってください。",
-                )
-                .weak(),
-            );
+            ui.label(RichText::new(tr().uninstall_winget).weak());
             return;
         }
 
         if !self.confirm_uninstall {
-            if ui.button("完全に削除して終了").clicked() {
+            if ui.button(tr().uninstall_button).clicked() {
                 self.confirm_uninstall = true;
             }
             ui.label(
-                RichText::new("設定・自動起動の登録・IsImeOn.exe をすべて削除します")
+                RichText::new(tr().uninstall_note)
                     .weak()
                     .small(),
             );
@@ -587,13 +611,13 @@ impl SettingsApp {
 
         ui.colored_label(
             Color32::from_rgb(0xE0, 0xA0, 0x30),
-            "本当に削除しますか?この操作は元に戻せません。",
+            tr().uninstall_confirm,
         );
         ui.horizontal(|ui| {
-            if ui.button("削除する").clicked() {
+            if ui.button(tr().uninstall_delete).clicked() {
                 self.run_uninstall(ui.ctx());
             }
-            if ui.button("キャンセル").clicked() {
+            if ui.button(tr().cancel).clicked() {
                 self.confirm_uninstall = false;
             }
         });
@@ -605,7 +629,7 @@ impl SettingsApp {
             // 消せないものがあるときは exe を消さずに知らせる(消し残しを隠さない)
             self.confirm_uninstall = false;
             self.refresh_startup_state();
-            self.status = format!("削除できない項目があります: {}", errors.join(" / "));
+            self.status = (tr().uninstall_errors)(&errors.join(" / "));
             return;
         }
         post_to_main(WM_APP_QUIT); // 常駐プロセスを終了させる(exe のロックを外す)
@@ -640,9 +664,9 @@ fn apply_preset(config: &mut AppConfig, preset: &Preset) {
 
 fn shape_label(shape: IndicatorShape) -> &'static str {
     match shape {
-        IndicatorShape::Teardrop => "しずく(OS風・上下)",
-        IndicatorShape::TopCircle => "丸",
-        IndicatorShape::Badge => "文字バッジ",
+        IndicatorShape::Teardrop => tr().shape_teardrop,
+        IndicatorShape::TopCircle => tr().shape_circle,
+        IndicatorShape::Badge => tr().shape_badge,
     }
 }
 
@@ -669,7 +693,7 @@ fn draw_preview(
     let text_rect = p.text(
         text_pos,
         egui::Align2::LEFT_CENTER,
-        "あいうえお",
+        tr().preview_sample,
         FontId::proportional(FONT_SIZE),
         Color32::BLACK,
     );

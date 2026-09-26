@@ -7,6 +7,7 @@
 mod caret;
 mod config;
 mod engine;
+mod i18n;
 mod ime;
 mod overlay;
 mod settings;
@@ -22,7 +23,7 @@ use std::cell::{Cell, RefCell};
 use tray::{
     Tray, CMD_EXIT, CMD_OPEN, CMD_PAUSE, CMD_RELOAD, TIMER_TRAY_RETRY, TRAY_RETRY_MS, WM_APP_TRAY,
 };
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -65,6 +66,8 @@ fn visible_by_mode(config: &AppConfig) -> [bool; 7] {
 }
 
 fn main() {
+    AppConfig::load().apply_language();
+
     // 設定ウィンドウ専用プロセスとして起動された場合(トレイの「設定を開く」から)
     if std::env::args().any(|a| a == "--settings-window") {
         settings::run_settings_process();
@@ -75,9 +78,10 @@ fn main() {
         // 二重起動防止(既に起動していれば知らせて終了する)
         let _mutex = CreateMutexW(None, true, w!("Local\\IsImeOn_SingleInstance"));
         if GetLastError() == ERROR_ALREADY_EXISTS {
+            let text: Vec<u16> = i18n::tr().already_running.encode_utf16().chain([0]).collect();
             MessageBoxW(
                 None,
-                w!("IsImeOn は既に起動しています。タスクトレイのアイコンから設定を開けます。"),
+                PCWSTR(text.as_ptr()),
                 w!("IsImeOn"),
                 MB_OK | MB_ICONINFORMATION,
             );
@@ -212,6 +216,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         settings::WM_APP_RELOAD => {
             let done = with_app(|app| {
                 app.config = AppConfig::load();
+                app.config.apply_language();
                 app.engine.set_visible_by_mode(visible_by_mode(&app.config));
                 update_tray(app);
             })
@@ -311,7 +316,7 @@ fn update_tray(app: &mut App) {
     } else {
         parse_rgb_hex(&setting.color).unwrap_or((0, 0, 0))
     };
-    let suffix = if app.paused { "(一時停止中)" } else { "" };
+    let suffix = if app.paused { i18n::tr().tip_paused } else { "" };
     let tip = format!("IsImeOn — {}{}", app.current_mode.display_name(), suffix);
     app.tray
         .update(color, &setting.label, parse_rgb_hex(&setting.label_color), &tip);
@@ -323,6 +328,7 @@ fn handle_command(hwnd: HWND, cmd: u32) {
         CMD_RELOAD => {
             with_app(|app| {
                 app.config = AppConfig::load();
+                app.config.apply_language();
                 app.engine.set_visible_by_mode(visible_by_mode(&app.config));
                 update_tray(app);
             });
