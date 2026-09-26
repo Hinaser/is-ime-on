@@ -2,7 +2,7 @@
 //! 設定プレビュー(egui・DIP)で描画APIは異なるが、形の定義はここに一本化する。
 //! 片方だけ変更して見た目がずれるのを防ぐため、比率・しきい値は必ずこの定数を使うこと。
 
-use crate::config::IndicatorShape;
+use crate::config::{IndicatorPosition, IndicatorShape};
 
 /// キャレット上の丸をどれだけ持ち上げるか(半径比)。
 const TOP_OFFSET: f32 = 0.55;
@@ -64,6 +64,38 @@ pub fn lower_circle(r: f32, cx: f32, caret_bottom: f32) -> Circle {
 /// バッジ矩形の左上座標(辺長は Metrics::badge_side)。
 pub fn badge_origin(side: f32, cx: f32, caret_top: f32) -> (f32, f32) {
     (cx - side / 2.0, caret_top - BADGE_GAP - side)
+}
+
+/// キャレットの縦範囲。各形状は「上配置」で計算し、Below ならこの範囲の中心で上下反転する。
+#[derive(Clone, Copy, Debug)]
+pub struct CaretSpan {
+    pub top: f32,
+    pub bottom: f32,
+    pub position: IndicatorPosition,
+}
+
+impl CaretSpan {
+    fn flip_y(&self, y: f32) -> f32 {
+        match self.position {
+            IndicatorPosition::Above => y,
+            IndicatorPosition::Below => self.top + self.bottom - y,
+        }
+    }
+
+    /// 上配置で計算した円を実際の位置へ。
+    pub fn place_circle(&self, (x, y, r): Circle) -> Circle {
+        (x, self.flip_y(y), r)
+    }
+
+    /// バッジ矩形の左上座標(位置反映済み)。
+    pub fn badge_origin(&self, side: f32, cx: f32) -> (f32, f32) {
+        let (left, top) = badge_origin(side, cx, self.top);
+        match self.position {
+            IndicatorPosition::Above => (left, top),
+            // 反転すると矩形の下端が上端になる
+            IndicatorPosition::Below => (left, self.flip_y(top + side)),
+        }
+    }
 }
 
 /// バッジ文字のフォントサイズ。2文字以上なら小さくして収める。
@@ -131,6 +163,21 @@ mod tests {
         assert_eq!(badge_font_size(24.0, 1), 24.0 * 0.66);
         assert_eq!(badge_font_size(24.0, 2), 24.0 * 0.48);
         assert_eq!(BADGE_CORNER_RATIO, 0.18);
+    }
+
+    #[test]
+    fn below_mirrors_around_caret() {
+        let above = CaretSpan { top: 100.0, bottom: 120.0, position: IndicatorPosition::Above };
+        let below = CaretSpan { position: IndicatorPosition::Below, ..above };
+        let c = top_circle(10.0, 50.0, 100.0);
+        assert_eq!(above.place_circle(c), c);
+        let (x, y, r) = below.place_circle(c);
+        assert_eq!((x, r), (50.0, 10.0));
+        assert_eq!(y - 120.0, 100.0 - c.1); // 下端から同じだけ離れる
+
+        let (_, top) = below.badge_origin(24.0, 50.0);
+        assert_eq!(top, 120.0 + BADGE_GAP);
+        assert_eq!(above.badge_origin(24.0, 50.0), badge_origin(24.0, 50.0, 100.0));
     }
 
     #[test]

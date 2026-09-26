@@ -4,7 +4,9 @@
 //! 編集のたびに config.json へ保存し、常駐プロセスへ WM_APP_RELOAD を送って即時反映する
 //! (保存ボタンはない)。
 
-use crate::config::{parse_rgb_hex, to_rgb_hex, AppConfig, ImeMode, IndicatorShape, Preset};
+use crate::config::{
+    parse_rgb_hex, to_rgb_hex, AppConfig, ImeMode, IndicatorPosition, IndicatorShape, Preset,
+};
 use crate::shape::{self, Metrics};
 use crate::sysint;
 use eframe::egui::{self, Color32, ComboBox, FontId, RichText, Slider, Stroke};
@@ -292,6 +294,15 @@ impl SettingsApp {
             if shape != self.config.shape_enum() {
                 self.config.shape = shape.to_config_str().into();
             }
+
+            ui.add_space(12.0);
+            ui.label("位置:");
+            let mut position = self.config.position_enum();
+            ui.selectable_value(&mut position, IndicatorPosition::Above, "キャレットの上");
+            ui.selectable_value(&mut position, IndicatorPosition::Below, "キャレットの下");
+            if position != self.config.position_enum() {
+                self.config.position = position.to_config_str().into();
+            }
         });
     }
 
@@ -376,12 +387,13 @@ impl SettingsApp {
 
     fn ui_preview(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let shape = self.config.shape_enum();
+        let position = self.config.position_enum();
         let mode = self.selected;
         let setting = self.config.for_mode(mode);
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label(format!("プレビュー: {}", mode.display_name()));
-                draw_preview(ui, &setting, shape);
+                draw_preview(ui, &setting, shape, position);
             });
             ui.add_space(12.0);
             ui.vertical(|ui| {
@@ -629,13 +641,18 @@ fn apply_preset(config: &mut AppConfig, preset: &Preset) {
 fn shape_label(shape: IndicatorShape) -> &'static str {
     match shape {
         IndicatorShape::Teardrop => "しずく(OS風・上下)",
-        IndicatorShape::TopCircle => "丸(上)",
+        IndicatorShape::TopCircle => "丸",
         IndicatorShape::Badge => "文字バッジ",
     }
 }
 
 /// 設定画面のプレビュー: テキスト欄風の背景+サンプル文字+キャレット+インジケーター。
-fn draw_preview(ui: &mut egui::Ui, setting: &crate::config::ModeSetting, shape: IndicatorShape) {
+fn draw_preview(
+    ui: &mut egui::Ui,
+    setting: &crate::config::ModeSetting,
+    shape: IndicatorShape,
+    position: IndicatorPosition,
+) {
     let (resp, p) = ui.allocate_painter(egui::vec2(220.0, 100.0), egui::Sense::hover());
     let rect = resp.rect;
 
@@ -683,22 +700,23 @@ fn draw_preview(ui: &mut egui::Ui, setting: &crate::config::ModeSetting, shape: 
     let metrics = Metrics::preview(setting.size);
     let r = metrics.blob_r;
     let cx = caret_x + 0.8;
-    let circle = |c: shape::Circle| egui::pos2(c.0, c.1);
+    let span = shape::CaretSpan { top: caret_top, bottom: caret_bottom, position };
+    let fill_circle = |c: shape::Circle| {
+        let (x, y, r) = span.place_circle(c);
+        p.circle_filled(egui::pos2(x, y), r, color);
+    };
 
     match shape {
         IndicatorShape::Teardrop => {
-            let top = shape::top_circle(r, cx, caret_top);
-            p.circle_filled(circle(top), top.2, color);
-            let low = shape::lower_circle(r, cx, caret_bottom);
-            p.circle_filled(circle(low), low.2, color);
+            fill_circle(shape::top_circle(r, cx, caret_top));
+            fill_circle(shape::lower_circle(r, cx, caret_bottom));
         }
         IndicatorShape::TopCircle => {
-            let top = shape::top_circle(r, cx, caret_top);
-            p.circle_filled(circle(top), top.2, color);
+            fill_circle(shape::top_circle(r, cx, caret_top));
         }
         IndicatorShape::Badge => {
             let side = metrics.badge_side;
-            let (left, top) = shape::badge_origin(side, cx, caret_top);
+            let (left, top) = span.badge_origin(side, cx);
             let badge =
                 egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(side, side));
             p.rect_filled(badge, side * shape::BADGE_CORNER_RATIO, color);

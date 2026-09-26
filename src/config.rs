@@ -93,6 +93,30 @@ impl IndicatorShape {
     }
 }
 
+/// キャレットに対するインジケーターの位置。config には小文字の文字列で保存する。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IndicatorPosition {
+    Above,
+    /// macOS 風。形状を上下反転してキャレットの下側に出す。
+    Below,
+}
+
+impl IndicatorPosition {
+    pub fn parse(s: &str) -> IndicatorPosition {
+        match s.to_ascii_lowercase().as_str() {
+            "below" => IndicatorPosition::Below,
+            _ => IndicatorPosition::Above,
+        }
+    }
+
+    pub fn to_config_str(self) -> &'static str {
+        match self {
+            IndicatorPosition::Above => "above",
+            IndicatorPosition::Below => "below",
+        }
+    }
+}
+
 /// "#RRGGBB" → (r, g, b)。
 pub fn parse_rgb_hex(s: &str) -> Option<(u8, u8, u8)> {
     let t = s.trim().trim_start_matches('#');
@@ -149,6 +173,8 @@ pub struct AppConfig {
     pub poll_interval_ms: i32,
     /// "teardrop" | "topcircle" | "badge"
     pub shape: String,
+    /// "above" | "below"
+    pub position: String,
     pub presets: Vec<Preset>,
 }
 
@@ -159,6 +185,7 @@ impl Default for AppConfig {
             modes: default_modes(),
             poll_interval_ms: 100,
             shape: "badge".into(),
+            position: "above".into(),
             presets: Vec::new(),
         }
     }
@@ -189,6 +216,10 @@ pub fn default_modes() -> BTreeMap<String, ModeSetting> {
 impl AppConfig {
     pub fn shape_enum(&self) -> IndicatorShape {
         IndicatorShape::parse(&self.shape)
+    }
+
+    pub fn position_enum(&self) -> IndicatorPosition {
+        IndicatorPosition::parse(&self.position)
     }
 
     pub fn for_mode(&self, mode: ImeMode) -> ModeSetting {
@@ -262,6 +293,21 @@ mod tests {
             assert_eq!(IndicatorShape::parse(shape.to_config_str()), shape);
         }
         assert_eq!(IndicatorShape::parse("unknown"), IndicatorShape::Teardrop);
+    }
+
+    #[test]
+    fn position_round_trips() {
+        for pos in [IndicatorPosition::Above, IndicatorPosition::Below] {
+            assert_eq!(IndicatorPosition::parse(pos.to_config_str()), pos);
+        }
+        assert_eq!(IndicatorPosition::parse("unknown"), IndicatorPosition::Above);
+    }
+
+    #[test]
+    fn missing_position_defaults_to_above() {
+        // Position 追加前の config.json もそのまま読めること
+        let cfg: AppConfig = serde_json::from_str(r#"{"Shape":"badge"}"#).unwrap();
+        assert_eq!(cfg.position_enum(), IndicatorPosition::Above);
     }
 
     #[test]

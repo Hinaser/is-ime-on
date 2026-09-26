@@ -3,7 +3,7 @@
 //! 座標・サイズはすべて物理px(プロセスは Per-Monitor DPI aware)。
 
 use crate::caret::CaretInfo;
-use crate::config::IndicatorShape;
+use crate::config::{IndicatorPosition, IndicatorShape};
 use crate::shape::{self, Metrics};
 use windows::core::{w, Result};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
@@ -42,6 +42,7 @@ pub struct DrawParams {
     pub color: (u8, u8, u8),
     pub size: i32,
     pub shape: IndicatorShape,
+    pub position: IndicatorPosition,
     pub label: String,
     pub label_color: Option<(u8, u8, u8)>,
 }
@@ -188,6 +189,9 @@ impl Overlay {
         let cx = margin as f32;
         let caret_top = margin as f32;
         let caret_bottom = (margin + p.caret.height) as f32;
+        // ウィンドウはキャレットの上下に同じ余白を取るので、下配置でもはみ出さない
+        let span = shape::CaretSpan { top: caret_top, bottom: caret_bottom, position: p.position };
+        let place = |c| ellipse(span.place_circle(c));
         let color = color_f(p.color, 1.0);
 
         unsafe {
@@ -205,15 +209,14 @@ impl Overlay {
             let r = metrics.blob_r;
             match p.shape {
                 IndicatorShape::Teardrop => {
-                    self.rt.FillEllipse(&ellipse(shape::top_circle(r, cx, caret_top)), &brush);
-                    self.rt
-                        .FillEllipse(&ellipse(shape::lower_circle(r, cx, caret_bottom)), &brush);
+                    self.rt.FillEllipse(&place(shape::top_circle(r, cx, caret_top)), &brush);
+                    self.rt.FillEllipse(&place(shape::lower_circle(r, cx, caret_bottom)), &brush);
                 }
                 IndicatorShape::TopCircle => {
-                    self.rt.FillEllipse(&ellipse(shape::top_circle(r, cx, caret_top)), &brush);
+                    self.rt.FillEllipse(&place(shape::top_circle(r, cx, caret_top)), &brush);
                 }
                 IndicatorShape::Badge => {
-                    self.draw_badge(p, metrics.badge_side, cx, caret_top)?;
+                    self.draw_badge(p, metrics.badge_side, cx, &span)?;
                 }
             }
 
@@ -261,9 +264,9 @@ impl Overlay {
         Ok(())
     }
 
-    fn draw_badge(&self, p: &DrawParams, side: f32, cx: f32, caret_top: f32) -> Result<()> {
+    fn draw_badge(&self, p: &DrawParams, side: f32, cx: f32, span: &shape::CaretSpan) -> Result<()> {
         let label = if p.label.is_empty() { "?" } else { &p.label };
-        let (left, top) = shape::badge_origin(side, cx, caret_top);
+        let (left, top) = span.badge_origin(side, cx);
         let rect = D2D_RECT_F {
             left,
             top,

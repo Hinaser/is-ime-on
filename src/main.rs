@@ -289,6 +289,7 @@ fn apply_state(app: &mut App, mode: ImeMode, caret: Option<caret::CaretInfo>) {
                     color: parse_rgb_hex(&setting.color).unwrap_or((0, 0, 0)),
                     size: setting.size.clamp(1, 5),
                     shape: app.config.shape_enum(),
+                    position: app.config.position_enum(),
                     label: setting.label.clone(),
                     label_color: parse_rgb_hex(&setting.label_color),
                 });
