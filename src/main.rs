@@ -18,8 +18,10 @@ mod uia;
 use config::{parse_rgb_hex, AppConfig, ImeMode};
 use engine::{Engine, WM_APP_STATE};
 use overlay::{DrawParams, Overlay};
-use std::cell::RefCell;
-use tray::{Tray, CMD_EXIT, CMD_OPEN, CMD_PAUSE, CMD_RELOAD, WM_APP_TRAY};
+use std::cell::{Cell, RefCell};
+use tray::{
+    Tray, CMD_EXIT, CMD_OPEN, CMD_PAUSE, CMD_RELOAD, TIMER_TRAY_RETRY, TRAY_RETRY_MS, WM_APP_TRAY,
+};
 use windows::core::w;
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -30,11 +32,12 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, MessageBoxW, PostMessageW,
-    PostQuitMessage, RegisterClassW, TranslateMessage, EVENT_OBJECT_FOCUS,
+    ChangeWindowMessageFilterEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    GetMessageW, KillTimer, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW,
+    RegisterWindowMessageW, SetTimer, TranslateMessage, EVENT_OBJECT_FOCUS,
     EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, MB_ICONINFORMATION, MB_OK, MSG,
-    OBJID_CARET, WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_DESTROY,
-    WM_LBUTTONDBLCLK, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+    MSGFLT_ALLOW, OBJID_CARET, WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    WM_DESTROY, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
 };
 
 struct App {
@@ -48,7 +51,10 @@ struct App {
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
+    /// Explorer(タスクバー)再作成時にブロードキャストされる "TaskbarCreated" のID。
+    static WM_TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
 }
+
 
 fn visible_by_mode(config: &AppConfig) -> [bool; 7] {
     let mut v = [false; 7];
@@ -106,6 +112,14 @@ fn main() {
         )
         .expect("CreateWindowExW");
 
+        // Explorer 再起動でトレイアイコンは消えるため、TaskbarCreated で登録し直す。
+        // 管理者権限で動いている場合も UIPI に落とされないよう明示的に許可する。
+        let taskbar_created = RegisterWindowMessageW(w!("TaskbarCreated"));
+        WM_TASKBAR_CREATED.with(|c| c.set(taskbar_created));
+        if taskbar_created != 0 {
+            let _ = ChangeWindowMessageFilterEx(hwnd, taskbar_created, MSGFLT_ALLOW, None);
+        }
+
         // exe を移動された場合に備え、自動起動の登録先を現在のパスへ追随させる
         sysint::refresh_startup_if_moved();
 
@@ -127,7 +141,9 @@ fn main() {
                 current_mode: ImeMode::Off,
             });
         });
-        with_app(update_tray); // 初期アイコン(IMEオフ色)
+        // 初期アイコン(IMEオフ色)。ログオン直後の自動起動では通知領域が未準備で
+        // 登録に失敗することがあるが、その場合は Tray が再試行タイマーを張る
+        with_app(update_tray);
 
         // 省電力の要: フォアグラウンド切替・フォーカス移動・キャレット移動で即時 poke。
         // イベントが途絶えたらポーラーは自動でバックオフする。
@@ -224,6 +240,24 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 }
                 WM_LBUTTONDBLCLK => handle_command(hwnd, CMD_OPEN),
                 _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == TIMER_TRAY_RETRY => {
+            // 借用競合で実行できなかった場合は次のタイマーで再試行する
+            if with_app(|app| app.tray.ensure_added()) == Some(true) {
+                unsafe {
+                    let _ = KillTimer(Some(hwnd), TIMER_TRAY_RETRY);
+                }
+            }
+            LRESULT(0)
+        }
+        m if m != 0 && m == WM_TASKBAR_CREATED.with(|c| c.get()) => {
+            // 登録失敗時は Tray 自身がタイマーを張る。ここで張るのは借用競合で実行できなかった場合
+            if with_app(|app| app.tray.readd()).is_none() {
+                unsafe {
+                    SetTimer(Some(hwnd), TIMER_TRAY_RETRY, TRAY_RETRY_MS, None);
+                }
             }
             LRESULT(0)
         }

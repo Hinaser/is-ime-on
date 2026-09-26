@@ -30,7 +30,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
-    GetSystemMetrics, SetForegroundWindow, TrackPopupMenu, HICON, ICONINFO, MF_CHECKED,
+    GetSystemMetrics, SetForegroundWindow, SetTimer, TrackPopupMenu, HICON, ICONINFO, MF_CHECKED,
     MF_SEPARATOR, MF_STRING, SM_CXSMICON, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP,
 };
 
@@ -44,10 +44,18 @@ pub const CMD_RELOAD: u32 = 4;
 
 const TRAY_ID: u32 = 1;
 
+/// トレイ登録に失敗したときの再試行タイマー(WM_TIMER の wParam)。
+pub const TIMER_TRAY_RETRY: usize = 1;
+pub const TRAY_RETRY_MS: u32 = 2000;
+
 pub struct Tray {
     hwnd: HWND,
     icon: Option<HICON>,
     renderer: Option<BadgeIconRenderer>,
+    tip: String,
+    /// シェルに登録済みか。ログオン直後(Explorer 未準備)や Explorer 再起動で
+    /// 登録が失われるため、false の間は呼び出し側が ensure_added で再試行する。
+    added: bool,
 }
 
 impl Tray {
@@ -56,17 +64,57 @@ impl Tray {
         let icon = renderer
             .as_mut()
             .and_then(|r| r.render((0, 0, 0), "A", None));
-        let mut nid = base_nid(hwnd);
+        let mut tray = Tray {
+            hwnd,
+            icon,
+            renderer,
+            tip: "IsImeOn".to_string(),
+            added: false,
+        };
+        tray.add();
+        tray
+    }
+
+    /// 未登録なら登録を試みる。登録済みになったら true。
+    pub fn ensure_added(&mut self) -> bool {
+        if !self.added {
+            self.add();
+        }
+        self.added
+    }
+
+    /// Explorer 再起動(TaskbarCreated)時に呼ぶ。旧登録は消えているので登録し直す。
+    pub fn readd(&mut self) -> bool {
+        self.added = false;
+        self.ensure_added()
+    }
+
+    fn full_nid(&self) -> NOTIFYICONDATAW {
+        let mut nid = base_nid(self.hwnd);
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = WM_APP_TRAY;
-        if let Some(h) = icon {
+        if let Some(h) = self.icon {
             nid.hIcon = h;
         }
-        set_tip(&mut nid, "IsImeOn");
-        unsafe {
-            let _ = Shell_NotifyIconW(NIM_ADD, &nid);
+        set_tip(&mut nid, &self.tip);
+        nid
+    }
+
+    fn add(&mut self) {
+        let nid = self.full_nid();
+        // Explorer が高負荷だと NIM_ADD がタイムアウトで FALSE を返しつつ実際には
+        // 追加されていることがある。その場合 NIM_ADD の再試行は失敗し続けるので、
+        // NIM_MODIFY が通るかで登録済みかを確かめる。
+        self.added = unsafe {
+            Shell_NotifyIconW(NIM_ADD, &nid).as_bool()
+                || Shell_NotifyIconW(NIM_MODIFY, &nid).as_bool()
+        };
+        if !self.added {
+            // どの経路で失敗しても再試行が走るようにする(同IDの SetTimer は再設定になるだけ)
+            unsafe {
+                SetTimer(Some(self.hwnd), TIMER_TRAY_RETRY, TRAY_RETRY_MS, None);
+            }
         }
-        Tray { hwnd, icon, renderer }
     }
 
     /// アイコン(モード色の角丸バッジ+文字)とツールチップを現在モードに合わせて更新。
@@ -81,19 +129,26 @@ impl Tray {
             .renderer
             .as_mut()
             .and_then(|r| r.render(color, label, label_color));
-        let mut nid = base_nid(self.hwnd);
-        nid.uFlags = NIF_ICON | NIF_TIP;
-        if let Some(h) = new_icon {
-            nid.hIcon = h;
+        let old_icon = if new_icon.is_some() {
+            std::mem::replace(&mut self.icon, new_icon)
+        } else {
+            None
+        };
+        self.tip = tip.to_string();
+        if self.added {
+            let nid = self.full_nid();
+            if !unsafe { Shell_NotifyIconW(NIM_MODIFY, &nid) }.as_bool() {
+                // 登録が消えている(Explorer 再起動の取りこぼし等)。登録し直す
+                self.add();
+            }
+        } else {
+            self.add();
         }
-        set_tip(&mut nid, tip);
-        unsafe {
-            let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
-            if let Some(old) = self.icon.take() {
+        if let Some(old) = old_icon {
+            unsafe {
                 let _ = DestroyIcon(old);
             }
         }
-        self.icon = new_icon;
     }
 
     /// 右クリックメニューを表示し、選ばれたコマンドID(CMD_*)を返す。0 = 選択なし。
