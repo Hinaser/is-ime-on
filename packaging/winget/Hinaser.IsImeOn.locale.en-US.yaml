@@ -11,7 +11,7 @@ Description: |-
   Shows an indicator (character badge, teardrop, or circle) at the text caret
   that follows the current IME input mode (hiragana, katakana, etc.).
   Nothing is shown while the IME is off. Single portable exe with no runtime
-  dependencies, resident memory around 7 MB.
+  dependencies, resident memory around 5 MB (as shown in Task Manager).
 Tags:
 - ime
 - japanese

@@ -12,7 +12,20 @@
 
 ## メモリ
 
-常駐プロセスは約7MB(Private)。
+常駐プロセスはタスクマネージャーの「メモリ」列(プライベートワーキングセット)で約5MB。
+v0.2.0 のリリースビルドを既定設定で起動して測った値:
+
+| 指標 | インジケーター非表示 | インジケーター描画中 |
+|---|---|---|
+| プライベートワーキングセット(タスクマネージャーの「メモリ」) | 4.5MB | 5.5〜5.6MB |
+| プライベート(コミット済み、`PrivateMemorySize64`) | 6.4〜6.6MB | 7.6〜9.4MB |
+| ワーキングセット(Direct2D など共有DLLのページを含む) | 21〜27MB | 29〜31MB |
+
+「非表示」は既定設定(IMEオフではインジケーターを出さない)のまま起動・無操作・メモ帳への
+入力を各30秒続けた間の値で、ほぼ一定。「描画中」はIMEオフでもインジケーターを出す設定にして
+同じ操作をした値で、描画を始めると Direct2D の分だけ増え、その後は横ばい。範囲は2回の計測の幅。
+ワーキングセットは他プロセスと共有している DLL のページも数えるため、このアプリ単体の消費量としては
+プライベートワーキングセットを使う。
 
 設定ウィンドウは別プロセスとして起動し、閉じるとプロセスごと消える。
 常駐側のメモリは設定画面の開閉で変化しない。
@@ -67,10 +80,12 @@ $p.Refresh()
 "CPU: {0:N1} ms / 60s" -f ($p.TotalProcessorTime - $c0).TotalMilliseconds
 ```
 
-メモリ:
+メモリ(`WorkingSetPrivate` がタスクマネージャーの「メモリ」列と同じ値):
 
 ```powershell
-Get-Process IsImeOn | Select-Object WorkingSet64, PrivateMemorySize64
+$p = Get-Process IsImeOn | Select-Object -First 1
+$p | Select-Object WorkingSet64, PrivateMemorySize64
+(Get-CimInstance Win32_PerfRawData_PerfProc_Process -Filter "IDProcess=$($p.Id)").WorkingSetPrivate
 ```
 
 計測環境は Windows 11 Pro (26200)。「日本語入力中」はメモ帳をひらがなモードにして
