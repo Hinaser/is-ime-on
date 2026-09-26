@@ -145,6 +145,21 @@ pub struct Strings {
     pub startup_updated: &'static str,
     pub language: &'static str,
     pub lang_auto: &'static str,
+    pub updates: &'static str,
+    pub update_check: &'static str,
+    pub update_note: &'static str,
+    pub check_now: &'static str,
+    pub checking: &'static str,
+    pub up_to_date: fn(&str) -> String,
+    pub update_available: fn(&str) -> String,
+    pub open_release_page: &'static str,
+    pub update_failed: fn(&str) -> String,
+    pub update_winget_hint: &'static str,
+    /// トレイメニュー項目(アクセラレータつき)
+    pub update_menu: fn(&str) -> String,
+    pub update_title: &'static str,
+    /// (タグ, winget 管理か)
+    pub update_balloon: fn(&str, bool) -> String,
     pub diagnostics: &'static str,
     pub perf_log: &'static str,
     pub perf_log_note: &'static str,
@@ -221,6 +236,25 @@ pub static JA: Strings = Strings {
     startup_updated: "登録先を更新しました",
     language: "言語 / Language:",
     lang_auto: "自動(Windows に合わせる)",
+    updates: "更新",
+    update_check: "更新を自動で確認する(起動時と1日1回)",
+    update_note: "有効にすると GitHub(api.github.com)へ最新リリースを問い合わせます。知らせるだけで、ダウンロードや更新は自動では行いません。",
+    check_now: "今すぐ確認",
+    checking: "確認中…",
+    up_to_date: |v| format!("最新版です(v{v})"),
+    update_available: |tag| format!("新しいバージョン {tag} があります"),
+    open_release_page: "リリースページを開く",
+    update_failed: |e| format!("確認できませんでした: {e}"),
+    update_winget_hint: "winget で導入されています。`winget upgrade Hinaser.IsImeOn` で更新できます。",
+    update_menu: |tag| format!("新しいバージョン {tag} があります(&U)"),
+    update_title: "IsImeOn の新しいバージョンがあります",
+    update_balloon: |tag, winget| {
+        if winget {
+            format!("{tag} が公開されました。winget upgrade Hinaser.IsImeOn で更新できます。")
+        } else {
+            format!("{tag} が公開されました。クリックするとリリースページを開きます。")
+        }
+    },
     diagnostics: "診断",
     perf_log: "パフォーマンスログを記録する",
     perf_log_note: "1分ごとに処理時間・CPU時間・メモリを日時つきで perf.log に記録します。50ms を超えた処理はその時の前面アプリ名も記録します。アプリがログを外部へ送信することはありません。ログは削除するまで残ります。",
@@ -297,6 +331,25 @@ pub static EN: Strings = Strings {
     startup_updated: "Startup entry updated",
     language: "言語 / Language:",
     lang_auto: "Auto (match Windows)",
+    updates: "Updates",
+    update_check: "Check for updates automatically (at startup and once a day)",
+    update_note: "When this is on, IsImeOn asks GitHub (api.github.com) for the latest release. It only lets you know; nothing is downloaded or installed automatically.",
+    check_now: "Check now",
+    checking: "Checking…",
+    up_to_date: |v| format!("You're up to date (v{v})"),
+    update_available: |tag| format!("Version {tag} is available"),
+    open_release_page: "Open release page",
+    update_failed: |e| format!("Couldn't check for updates: {e}"),
+    update_winget_hint: "Installed with winget. To update, run `winget upgrade Hinaser.IsImeOn`.",
+    update_menu: |tag| format!("&Update available: {tag}"),
+    update_title: "IsImeOn update available",
+    update_balloon: |tag, winget| {
+        if winget {
+            format!("{tag} is available. To update, run winget upgrade Hinaser.IsImeOn.")
+        } else {
+            format!("{tag} is available. Click to open the release page.")
+        }
+    },
     diagnostics: "Diagnostics",
     perf_log: "Record a performance log",
     perf_log_note: "Writes timestamped processing times, CPU time, and memory usage to perf.log once a minute. For operations that take longer than 50 ms, the name of the foreground app is also recorded. IsImeOn doesn't send the log anywhere, and it stays until you delete it.",

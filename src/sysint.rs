@@ -64,6 +64,14 @@ fn find_processes(name: &str) -> Vec<u32> {
     pids
 }
 
+/// 既定のブラウザーで URL を開く。
+pub fn open_url(url: &str) {
+    let wide: Vec<u16> = url.encode_utf16().chain([0]).collect();
+    unsafe {
+        ShellExecuteW(None, w!("open"), PCWSTR(wide.as_ptr()), None, None, SW_SHOWNORMAL);
+    }
+}
+
 /// エクスプローラーでフォルダーを開く。
 pub fn open_folder(path: &Path) {
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();

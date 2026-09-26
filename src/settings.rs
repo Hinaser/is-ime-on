@@ -11,6 +11,7 @@ use crate::i18n::{self, tr, LangSetting};
 use crate::shape::{self, Metrics};
 use crate::sysint;
 use eframe::egui::{self, Color32, ComboBox, FontId, RichText, Slider, Stroke};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::w;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -25,7 +26,7 @@ pub const WM_APP_RELOAD: u32 = WM_APP + 3;
 /// アンインストール時に常駐プロセスへ終了を要求するメッセージ。
 pub const WM_APP_QUIT: u32 = WM_APP + 4;
 
-const WINDOW_HEIGHT: f32 = 640.0;
+const WINDOW_HEIGHT: f32 = 740.0;
 
 /// 設定ウィンドウを開く(設定プロセスを起動する)。既に開いていれば子プロセス側が前面化して終了する。
 pub fn open() {
@@ -172,6 +173,11 @@ struct SettingsApp {
     caret_height: i32,
     os_indicator: bool,
     last_sys_check: Instant,
+    /// 「今すぐ確認」の結果。None = 確認中(または未実行)
+    update_result: Arc<Mutex<Option<crate::update::CheckResult>>>,
+    update_checking: bool,
+    /// 「今すぐ確認」を押したことがあるか(結果表示の有無)
+    update_checked: bool,
 }
 
 impl SettingsApp {
@@ -192,6 +198,9 @@ impl SettingsApp {
             confirm_uninstall: false,
             os_indicator: sysint::is_os_indicator_active(),
             last_sys_check: Instant::now(),
+            update_result: Arc::new(Mutex::new(None)),
+            update_checking: false,
+            update_checked: false,
         }
     }
 
@@ -243,6 +252,7 @@ impl eframe::App for SettingsApp {
                 ui.separator();
                 self.ui_language(ui, ctx);
                 self.ui_startup(ui);
+                self.ui_update(ui);
                 self.ui_diagnostics(ui);
                 self.ui_uninstall(ui);
                 if !self.status.is_empty() {
@@ -586,6 +596,67 @@ impl SettingsApp {
                     }
                 });
             }
+        }
+    }
+
+    fn ui_update(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.label(RichText::new(tr().updates).strong());
+        ui.checkbox(&mut self.config.update_check, tr().update_check);
+        ui.label(RichText::new(tr().update_note).weak().small());
+
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!self.update_checking, egui::Button::new(tr().check_now))
+                .clicked()
+            {
+                // 明示的な操作なので、定期確認の設定に関係なく1回だけ問い合わせる
+                self.update_checking = true;
+                self.update_checked = true;
+                *self.update_result.lock().unwrap() = None;
+                let result = Arc::clone(&self.update_result);
+                let ctx = ui.ctx().clone();
+                std::thread::spawn(move || {
+                    *result.lock().unwrap() = Some(crate::update::check());
+                    ctx.request_repaint();
+                });
+            }
+            if !self.update_checked {
+                return;
+            }
+            let result = self.update_result.lock().unwrap().clone();
+            match result {
+                None => {
+                    ui.label(tr().checking);
+                }
+                Some(result) => {
+                    self.update_checking = false;
+                    match result {
+                        Ok(None) => {
+                            ui.label((tr().up_to_date)(crate::update::CURRENT_VERSION));
+                        }
+                        Ok(Some(tag)) => {
+                            ui.colored_label(
+                                Color32::from_rgb(0x40, 0xB0, 0x60),
+                                (tr().update_available)(&tag),
+                            );
+                            if ui.button(tr().open_release_page).clicked() {
+                                sysint::open_url(crate::update::RELEASES_URL);
+                            }
+                        }
+                        Err(e) => {
+                            ui.colored_label(
+                                Color32::from_rgb(0xE0, 0xA0, 0x30),
+                                (tr().update_failed)(&e),
+                            );
+                        }
+                    }
+                }
+            }
+        });
+        let found = matches!(&*self.update_result.lock().unwrap(), Some(Ok(Some(_))));
+        if found && sysint::is_winget_managed() {
+            ui.label(RichText::new(tr().update_winget_hint).weak().small());
         }
     }
 

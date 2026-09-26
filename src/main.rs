@@ -16,14 +16,17 @@ mod shape;
 mod sysint;
 mod tray;
 mod uia;
+mod update;
 
 use config::{parse_rgb_hex, AppConfig, ImeMode};
 use engine::{Engine, WM_APP_STATE};
 use overlay::{DrawParams, Overlay};
 use std::cell::{Cell, RefCell};
 use tray::{
-    Tray, CMD_EXIT, CMD_OPEN, CMD_PAUSE, CMD_RELOAD, TIMER_TRAY_RETRY, TRAY_RETRY_MS, WM_APP_TRAY,
+    Tray, CMD_EXIT, CMD_OPEN, CMD_PAUSE, CMD_RELOAD, CMD_UPDATE, NIN_BALLOONUSERCLICK,
+    TIMER_TRAY_RETRY, TRAY_RETRY_MS, WM_APP_TRAY,
 };
+use update::{Updater, WM_APP_UPDATE};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -47,6 +50,9 @@ struct App {
     overlay: Overlay,
     tray: Tray,
     engine: Engine,
+    updater: Updater,
+    /// バルーンで通知済みのバージョン(同じバージョンを何度も通知しない)。
+    notified_update: Option<String>,
     paused: bool,
     current_mode: ImeMode,
 }
@@ -56,6 +62,9 @@ thread_local! {
     /// Explorer(タスクバー)再作成時にブロードキャストされる "TaskbarCreated" のID。
     static WM_TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
 }
+
+/// 更新通知を借用競合で出せなかったときの再試行タイマー(TIMER_TRAY_RETRY と別ID)。
+const TIMER_UPDATE_NOTIFY: usize = 2;
 
 
 fn visible_by_mode(config: &AppConfig) -> [bool; 7] {
@@ -137,12 +146,15 @@ fn main() {
             config.poll_interval_ms.max(0) as u32,
             visible_by_mode(&config),
         );
+        let updater = Updater::start(hwnd, config.update_check);
         APP.with(|cell| {
             *cell.borrow_mut() = Some(App {
                 config,
                 overlay,
                 tray,
                 engine,
+                updater,
+                notified_update: None,
                 paused: false,
                 current_mode: ImeMode::Off,
             });
@@ -221,6 +233,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 app.config = AppConfig::load();
                 app.config.apply_language();
                 perf::configure(&app.config);
+                app.updater.set_enabled(app.config.update_check);
                 app.engine.set_visible_by_mode(visible_by_mode(&app.config));
                 update_tray(app);
             })
@@ -243,12 +256,45 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             match event {
                 WM_RBUTTONUP => {
                     // paused を読むだけの短い借用で済ませ、メニュー表示中は借用を持たない
-                    let paused = with_app(|app| app.paused).unwrap_or(false);
-                    let cmd = Tray::show_menu(hwnd, paused);
+                    let (paused, update) = with_app(|app| (app.paused, app.updater.available()))
+                        .unwrap_or((false, None));
+                    let update = update.map(|tag| (i18n::tr().update_menu)(&tag));
+                    let cmd = Tray::show_menu(hwnd, paused, update.as_deref());
                     handle_command(hwnd, cmd);
                 }
                 WM_LBUTTONDBLCLK => handle_command(hwnd, CMD_OPEN),
+                // バルーンを出すのは更新通知だけ
+                NIN_BALLOONUSERCLICK => handle_command(hwnd, CMD_UPDATE),
                 _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_APP_UPDATE => {
+            // 借用競合(モーダルループ中)で実行できなければ少し後に再試行する。
+            // 即時の再ポストは入れ子ループ内で空回りして CPU を使い切るため、タイマーで遅らせる
+            let done = with_app(|app| {
+                let Some(tag) = app.updater.available() else { return };
+                if app.notified_update.as_deref() != Some(tag.as_str()) {
+                    let t = i18n::tr();
+                    let text = (t.update_balloon)(&tag, sysint::is_winget_managed());
+                    // トレイ未登録で出せなかった場合は通知済みにしない(次の確認で再度試す)
+                    if app.tray.balloon(t.update_title, &text) {
+                        app.notified_update = Some(tag);
+                    }
+                }
+            })
+            .is_some();
+            if !done {
+                unsafe {
+                    SetTimer(Some(hwnd), TIMER_UPDATE_NOTIFY, 1000, None);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == TIMER_UPDATE_NOTIFY => {
+            unsafe {
+                let _ = KillTimer(Some(hwnd), TIMER_UPDATE_NOTIFY);
+                let _ = PostMessageW(Some(hwnd), WM_APP_UPDATE, WPARAM(0), LPARAM(0));
             }
             LRESULT(0)
         }
@@ -330,11 +376,13 @@ fn update_tray(app: &mut App) {
 fn handle_command(hwnd: HWND, cmd: u32) {
     match cmd {
         CMD_OPEN => settings::open(),
+        CMD_UPDATE => sysint::open_url(update::RELEASES_URL),
         CMD_RELOAD => {
             with_app(|app| {
                 app.config = AppConfig::load();
                 app.config.apply_language();
                 perf::configure(&app.config);
+                app.updater.set_enabled(app.config.update_check);
                 app.engine.set_visible_by_mode(visible_by_mode(&app.config));
                 update_tray(app);
             });

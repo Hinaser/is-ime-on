@@ -172,6 +172,8 @@ pub struct AppConfig {
     pub language: String,
     /// 性能ログ(perf.log)を記録するか。オプトイン。
     pub perf_log: bool,
+    /// GitHub へ新しいバージョンを問い合わせるか。オプトイン(既定では一切通信しない)。
+    pub update_check: bool,
     pub presets: Vec<Preset>,
 }
 
@@ -185,6 +187,7 @@ impl Default for AppConfig {
             position: "above".into(),
             language: "auto".into(),
             perf_log: false,
+            update_check: false,
             presets: Vec::new(),
         }
     }

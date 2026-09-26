@@ -88,6 +88,9 @@ winget install Hinaser.IsImeOn
 - 表示位置の選択: キャレットの上(既定)/ キャレットの下(macOS 風。形状は上下反転して描画)
 - カラーピッカー(色見本ボタンから RGB/HSV・16進で指定)、サイズはスライダー(1〜5)
 - UI の日本語/英語切り替え(既定は Windows の表示言語に合わせる。設定画面の「言語 / Language」で変更可)
+- オプトインの更新確認(既定はオフで、オフの間は一切通信しない)。オンにすると起動時と1日1回
+  GitHub の Releases API へ最新版を問い合わせ、新しい版があればトレイの通知とメニューで知らせる
+  (ダウンロード・更新は行わない。winget で導入した場合は `winget upgrade Hinaser.IsImeOn` で更新)
 - オプトインのパフォーマンスログ(`%APPDATA%\IsImeOn\perf.log`。詳細は [PERFORMANCE.md](PERFORMANCE.md))
 - 選択中モードの簡易プレビュー+「試し打ち」欄
 - Windows標準インジケーターが動作中の場合の二重表示警告と、その場で停止するボタン

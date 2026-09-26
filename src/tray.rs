@@ -25,13 +25,14 @@ use windows::Win32::Graphics::Gdi::{
     BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
 };
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE,
+    NIM_MODIFY,
     NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
     GetSystemMetrics, SetForegroundWindow, SetTimer, TrackPopupMenu, HICON, ICONINFO, MF_CHECKED,
-    MF_SEPARATOR, MF_STRING, SM_CXSMICON, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP,
+    MF_SEPARATOR, MF_STRING, SM_CXSMICON, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_USER,
 };
 
 /// トレイアイコンからのコールバックメッセージ。
@@ -41,6 +42,10 @@ pub const CMD_OPEN: u32 = 1;
 pub const CMD_PAUSE: u32 = 2;
 pub const CMD_EXIT: u32 = 3;
 pub const CMD_RELOAD: u32 = 4;
+pub const CMD_UPDATE: u32 = 5;
+
+/// バルーン通知がクリックされたときのトレイコールバックイベント(NIN_BALLOONUSERCLICK)。
+pub const NIN_BALLOONUSERCLICK: u32 = WM_USER + 5;
 
 const TRAY_ID: u32 = 1;
 
@@ -151,17 +156,36 @@ impl Tray {
         }
     }
 
+    /// バルーン通知を出す。出せたら true(未登録なら何もせず false)。
+    pub fn balloon(&self, title: &str, text: &str) -> bool {
+        if !self.added {
+            return false;
+        }
+        let mut nid = base_nid(self.hwnd);
+        nid.uFlags = NIF_INFO;
+        nid.dwInfoFlags = NIIF_INFO;
+        copy_truncated(&mut nid.szInfoTitle, title);
+        copy_truncated(&mut nid.szInfo, text);
+        unsafe { Shell_NotifyIconW(NIM_MODIFY, &nid).as_bool() }
+    }
+
     /// 右クリックメニューを表示し、選ばれたコマンドID(CMD_*)を返す。0 = 選択なし。
     ///
     /// TrackPopupMenu は入れ子のメッセージループを回すため、この関数の実行中に
     /// wndproc が再入する。App の RefCell を借りたまま呼ぶと二重借用でパニックする
     /// (release は panic=abort なのでプロセスごと落ちる)ので、
     /// あえて &self を取らず hwnd と paused だけで動くようにしてある。
-    pub fn show_menu(hwnd: HWND, paused: bool) -> u32 {
+    /// `update` は新しいバージョンがあるときの先頭項目の文言。
+    pub fn show_menu(hwnd: HWND, paused: bool, update: Option<&str>) -> u32 {
         unsafe {
             let Ok(menu) = CreatePopupMenu() else {
                 return 0;
             };
+            if let Some(label) = update {
+                let label = wide(label);
+                let _ = AppendMenuW(menu, MF_STRING, CMD_UPDATE as usize, PCWSTR(label.as_ptr()));
+                let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            }
             let t = crate::i18n::tr();
             let [open, reload, pause, exit] =
                 [t.tray_open, t.tray_reload, t.tray_pause, t.tray_exit].map(wide);
@@ -218,9 +242,14 @@ fn base_nid(hwnd: HWND) -> NOTIFYICONDATAW {
 }
 
 fn set_tip(nid: &mut NOTIFYICONDATAW, tip: &str) {
-    let utf16: Vec<u16> = tip.encode_utf16().take(127).collect();
-    nid.szTip[..utf16.len()].copy_from_slice(&utf16);
-    nid.szTip[utf16.len()] = 0;
+    copy_truncated(&mut nid.szTip, tip);
+}
+
+/// 固定長の UTF-16 バッファへ NUL 終端つきで収まる分だけ書く。
+fn copy_truncated(dst: &mut [u16], s: &str) {
+    let utf16: Vec<u16> = s.encode_utf16().take(dst.len() - 1).collect();
+    dst[..utf16.len()].copy_from_slice(&utf16);
+    dst[utf16.len()] = 0;
 }
 
 /// モード色の角丸バッジ+文字のトレイアイコンを Direct2D で描く。
