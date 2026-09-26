@@ -25,7 +25,7 @@ pub const WM_APP_RELOAD: u32 = WM_APP + 3;
 /// アンインストール時に常駐プロセスへ終了を要求するメッセージ。
 pub const WM_APP_QUIT: u32 = WM_APP + 4;
 
-const WINDOW_HEIGHT: f32 = 560.0;
+const WINDOW_HEIGHT: f32 = 640.0;
 
 /// 設定ウィンドウを開く(設定プロセスを起動する)。既に開いていれば子プロセス側が前面化して終了する。
 pub fn open() {
@@ -243,6 +243,7 @@ impl eframe::App for SettingsApp {
                 ui.separator();
                 self.ui_language(ui, ctx);
                 self.ui_startup(ui);
+                self.ui_diagnostics(ui);
                 self.ui_uninstall(ui);
                 if !self.status.is_empty() {
                     ui.add_space(4.0);
@@ -586,6 +587,19 @@ impl SettingsApp {
                 });
             }
         }
+    }
+
+    fn ui_diagnostics(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.label(RichText::new(tr().diagnostics).strong());
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.config.perf_log, tr().perf_log);
+            if ui.button(tr().open_log_folder).clicked() {
+                let _ = std::fs::create_dir_all(AppConfig::dir_path());
+                sysint::open_folder(&AppConfig::dir_path());
+            }
+        });
+        ui.label(RichText::new(tr().perf_log_note).weak().small());
     }
 
     fn ui_uninstall(&mut self, ui: &mut egui::Ui) {

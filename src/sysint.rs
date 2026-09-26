@@ -1,5 +1,6 @@
 //! Windows 側の状態(スタートアップ登録・競合ツール検出)。すべて HKCU のみ。
 
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS};
@@ -61,6 +62,14 @@ fn find_processes(name: &str) -> Vec<u32> {
         let _ = CloseHandle(snap);
     }
     pids
+}
+
+/// エクスプローラーでフォルダーを開く。
+pub fn open_folder(path: &Path) {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    unsafe {
+        ShellExecuteW(None, w!("open"), PCWSTR(wide.as_ptr()), None, None, SW_SHOWNORMAL);
+    }
 }
 
 pub fn open_cursor_settings() {

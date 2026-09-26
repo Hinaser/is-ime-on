@@ -9,6 +9,7 @@
 use crate::caret::{self, CaretInfo};
 use crate::config::ImeMode;
 use crate::ime;
+use crate::perf::{self, Metric};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -140,6 +141,8 @@ fn poller_loop(
             inner.poked = false;
             (inner.paused, inner.visible_by_mode)
         };
+        perf::maybe_flush();
+        perf::count_poll();
 
         // ロック外で読み取り(ハング中のアプリで最大200ms×2+UIA分ブロックしうる)
         let (fg, info) = caret::foreground_thread_info();
@@ -152,10 +155,12 @@ fn poller_loop(
             .filter(|i| !i.hwndFocus.is_invalid())
             .map(|i| i.hwndFocus)
             .unwrap_or(fg);
+        let t = perf::start();
         let mode = ime::read_mode(target);
+        perf::record(Metric::Ime, t, Some(fg));
 
         let want_caret = !paused && visible_by_mode[mode.index()];
-        let caret = if want_caret { caret::get_caret() } else { None };
+        let caret = if want_caret { caret::get_caret(fg) } else { None };
         publish(&latest, hwnd_raw, mode, caret);
     }
 }

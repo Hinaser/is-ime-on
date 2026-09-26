@@ -10,6 +10,7 @@ mod engine;
 mod i18n;
 mod ime;
 mod overlay;
+mod perf;
 mod settings;
 mod shape;
 mod sysint;
@@ -128,6 +129,7 @@ fn main() {
         sysint::refresh_startup_if_moved();
 
         let config = AppConfig::load();
+        perf::configure(&config);
         let overlay = Overlay::new().expect("overlay");
         let tray = Tray::new(hwnd);
         let engine = Engine::start(
@@ -198,6 +200,7 @@ extern "system" fn win_event_proc(
     if event == EVENT_OBJECT_LOCATIONCHANGE && idobject != OBJID_CARET.0 {
         return;
     }
+    perf::count_event();
     let _ = with_app(|app| app.engine.poke());
 }
 
@@ -217,6 +220,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             let done = with_app(|app| {
                 app.config = AppConfig::load();
                 app.config.apply_language();
+                perf::configure(&app.config);
                 app.engine.set_visible_by_mode(visible_by_mode(&app.config));
                 update_tray(app);
             })
@@ -267,6 +271,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             LRESULT(0)
         }
         WM_DESTROY => {
+            perf::shutdown();
             // Drop: トレイ削除・エンジン停止・オーバーレイ破棄。
             // 万一借用中でもパニック(=abort)せず、後始末をスキップして終了を優先する
             APP.with(|cell| {
@@ -329,6 +334,7 @@ fn handle_command(hwnd: HWND, cmd: u32) {
             with_app(|app| {
                 app.config = AppConfig::load();
                 app.config.apply_language();
+                perf::configure(&app.config);
                 app.engine.set_visible_by_mode(visible_by_mode(&app.config));
                 update_tray(app);
             });

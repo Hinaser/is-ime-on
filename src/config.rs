@@ -170,6 +170,8 @@ pub struct AppConfig {
     pub position: String,
     /// UI 言語。"auto" | "ja" | "en"
     pub language: String,
+    /// 性能ログ(perf.log)を記録するか。オプトイン。
+    pub perf_log: bool,
     pub presets: Vec<Preset>,
 }
 
@@ -182,6 +184,7 @@ impl Default for AppConfig {
             shape: "badge".into(),
             position: "above".into(),
             language: "auto".into(),
+            perf_log: false,
             presets: Vec::new(),
         }
     }

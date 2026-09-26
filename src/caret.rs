@@ -1,6 +1,7 @@
 //! キャレット位置(スクリーン座標・物理px)の取得。
 //! まずシステムキャレット(GetGUIThreadInfo)、取れないアプリでは UI Automation にフォールバック。
 
+use crate::perf::{self, Metric};
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -62,6 +63,15 @@ fn system_caret() -> Option<CaretInfo> {
 }
 
 /// システムキャレット → UIA の順で取得。どちらも不明なら None。
-pub fn get_caret() -> Option<CaretInfo> {
-    system_caret().or_else(crate::uia::get_caret)
+/// `fg` は性能ログで遅い呼び出しのアプリ名を記録するためだけに使う。
+pub fn get_caret(fg: HWND) -> Option<CaretInfo> {
+    let t = perf::start();
+    let sys = system_caret();
+    perf::record(Metric::Caret, t, Some(fg));
+    sys.or_else(|| {
+        let t = perf::start();
+        let caret = crate::uia::get_caret();
+        perf::record(Metric::Uia, t, Some(fg));
+        caret
+    })
 }

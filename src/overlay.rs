@@ -4,6 +4,7 @@
 
 use crate::caret::CaretInfo;
 use crate::config::{IndicatorPosition, IndicatorShape};
+use crate::perf;
 use crate::shape::{self, Metrics};
 use windows::core::{w, Result};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
@@ -159,7 +160,10 @@ impl Overlay {
         if self.visible && self.last.as_ref() == Some(&params) {
             return; // 変化なし: 再描画・再配置ともに不要
         }
-        if self.render(&params).is_ok() {
+        let t = perf::start();
+        let rendered = self.render(&params).is_ok();
+        perf::record(perf::Metric::Render, t, None);
+        if rendered {
             self.visible = true;
             self.last = Some(params);
         }
